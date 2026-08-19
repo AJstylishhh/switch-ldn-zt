@@ -19,13 +19,26 @@ jobs:
       - name: Clone libzt
         run: git clone --recurse-submodules https://github.com/zerotier/libzt.git
 
-      - name: Attempt aarch64-none-elf build (EXPECTED TO FAIL INITIALLY)
-        # This step is a scratchpad, not a working build yet — see ROADMAP.md step 1.
-        # Once we have a real toolchain file this becomes a proper cmake invocation.
+      - name: Configure libztcore (zto_obj) with devkitA64 toolchain
+        # First real attempt: just the ZeroTier core protocol/crypto object library,
+        # which doesn't need the lwIP socket layer yet. Expected to surface real
+        # missing-header/symbol errors — that's useful signal, not a failure of the pipeline.
+        working-directory: libzt
         run: |
-          echo "devkitA64 available at: $DEVKITPRO/devkitA64"
-          $DEVKITPRO/devkitA64/bin/aarch64-none-elf-g++ --version
-          echo "TODO: replace with real libzt cross-compile once toolchain file exists (ROADMAP.md step 1)"
+          mkdir -p build-switch
+          cd build-switch
+          cmake -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/cmake/switch.toolchain.cmake \
+                -DBUILD_STATIC_LIB=ON \
+                -DBUILD_SHARED_LIB=OFF \
+                -DBUILD_HOST_SELFTEST=OFF \
+                -DALLOW_INSTALL_TARGET=OFF \
+                -DZTS_DISABLE_CENTRAL_API=ON \
+                ..
+        continue-on-error: true
+
+      - name: Attempt to build just the zto_obj target
+        working-directory: libzt/build-switch
+        run: cmake --build . --target zto_obj --verbose
         continue-on-error: true
 
       - name: Build ldn_mitm base (sanity check toolchain works at all)
@@ -33,3 +46,4 @@ jobs:
           git clone https://github.com/spacemeowx2/ldn_mitm.git
           echo "TODO: needs libstratosphere submodule + Atmosphere headers to actually build — placeholder for now"
         continue-on-error: true
+        
