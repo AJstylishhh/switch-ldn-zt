@@ -1,7 +1,7 @@
 # CMake toolchain file for cross-compiling to Nintendo Switch (libnx / devkitA64).
 #
 # Usage:
-#   cmake -DCMAKE_TOOLCHAIN_FILE=cmake/switch.toolchain.cmake ...
+#   cmake -DCMAKE_TOOLCHAIN_FILE=/__w/switch-ldn-zt/switch-ldn-zt/cmake/switch.toolchain.cmake \
 #
 # Assumes the devkitpro/devkita64 Docker image (or a normal devkitPro install) where
 # the DEVKITPRO environment variable is already set, e.g. /opt/devkitpro
