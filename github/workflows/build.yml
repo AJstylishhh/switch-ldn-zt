@@ -1,0 +1,35 @@
+name: Build attempt
+
+# Same pattern as your NRO CI pipelines — trigger from phone via a normal push/PR,
+# GitHub's runner does the actual compiling so you never need a PC/laptop for this either.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-libzt-core:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone libzt
+        run: git clone --recurse-submodules https://github.com/zerotier/libzt.git
+
+      - name: Attempt aarch64-none-elf build (EXPECTED TO FAIL INITIALLY)
+        # This step is a scratchpad, not a working build yet — see ROADMAP.md step 1.
+        # Once we have a real toolchain file this becomes a proper cmake invocation.
+        run: |
+          echo "devkitA64 available at: $DEVKITPRO/devkitA64"
+          $DEVKITPRO/devkitA64/bin/aarch64-none-elf-g++ --version
+          echo "TODO: replace with real libzt cross-compile once toolchain file exists (ROADMAP.md step 1)"
+        continue-on-error: true
+
+      - name: Build ldn_mitm base (sanity check toolchain works at all)
+        run: |
+          git clone https://github.com/spacemeowx2/ldn_mitm.git
+          echo "TODO: needs libstratosphere submodule + Atmosphere headers to actually build — placeholder for now"
+        continue-on-error: true
