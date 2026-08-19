@@ -35,7 +35,7 @@ jobs:
         run: |
           mkdir -p build-switch
           cd build-switch
-          cmake -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/cmake/switch.toolchain.cmake \
+          cmake -DCMAKE_TOOLCHAIN_FILE=/__w/switch-ldn-zt/switch-ldn-zt/cmake/switch.toolchain.cmake \
                 -DBUILD_STATIC_LIB=ON \
                 -DBUILD_SHARED_LIB=OFF \
                 -DBUILD_HOST_SELFTEST=OFF \
