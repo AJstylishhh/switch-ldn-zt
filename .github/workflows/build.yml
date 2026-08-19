@@ -15,7 +15,12 @@ jobs:
     container: devkitpro/devkita64:latest
     steps:
       - uses: actions/checkout@v4
-
+      
+      - name: Debug files
+        run: |
+          pwd
+          ls -la
+          find . -name "switch.toolchain.cmake"
       - name: Clone libzt
         run: git clone --recurse-submodules https://github.com/zerotier/libzt.git
 
