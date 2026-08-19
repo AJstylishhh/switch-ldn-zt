@@ -24,6 +24,9 @@ jobs:
       - name: Clone libzt
         run: git clone --recurse-submodules https://github.com/zerotier/libzt.git
 
+      - name: Patch endian.h for Switch
+        run: |
+          sed -i 's|#include <endian.h>|// patched for Switch|g' libzt/ext/ZeroTierOne/node/Constants.hpp
       - name: Configure libztcore (zto_obj) with devkitA64 toolchain
         # First real attempt: just the ZeroTier core protocol/crypto object library,
         # which doesn't need the lwIP socket layer yet. Expected to surface real
