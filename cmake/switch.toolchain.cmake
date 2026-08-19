@@ -5,6 +5,7 @@
 #
 # Assumes the devkitpro/devkita64 Docker image (or a normal devkitPro install) where
 # the DEVKITPRO environment variable is already set, e.g. /opt/devkitpro
+
 if(NOT DEFINED ENV{DEVKITPRO})
     message(FATAL_ERROR "DEVKITPRO environment variable is not set. Install devkitPro / use the devkitpro/devkita64 Docker image.")
 endif()
