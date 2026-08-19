@@ -15,18 +15,18 @@ jobs:
     container: devkitpro/devkita64:latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Debug files
-        run: |
-          pwd
-          ls -la
-          find . -name "switch.toolchain.cmake"
+
       - name: Clone libzt
         run: git clone --recurse-submodules https://github.com/zerotier/libzt.git
 
-      - name: Patch endian.h for Switch
+      - name: Patch libzt for Switch target quirks
         run: |
           sed -i 's|#include <endian.h>|// patched for Switch|g' libzt/ext/ZeroTierOne/node/Constants.hpp
+          # getifaddrs()/freeifaddrs() don't exist on the Switch (no /proc, no full POSIX net
+          # interface enumeration) — same situation as Android, which ZeroTier already excludes
+          # via this same guard. We just add __SWITCH__ to that existing exclusion.
+          sed -i 's|#if ! defined(__ANDROID__)\t  // getifaddrs() freeifaddrs() not available on Android|#if ! defined(__ANDROID__) \&\& ! defined(__SWITCH__)  // getifaddrs()/freeifaddrs() not available on Android or Switch|' libzt/ext/ZeroTierOne/osdep/Binder.hpp
+
       - name: Configure libztcore (zto_obj) with devkitA64 toolchain
         # First real attempt: just the ZeroTier core protocol/crypto object library,
         # which doesn't need the lwIP socket layer yet. Expected to surface real
@@ -35,7 +35,7 @@ jobs:
         run: |
           mkdir -p build-switch
           cd build-switch
-          cmake -DCMAKE_TOOLCHAIN_FILE=/__w/switch-ldn-zt/switch-ldn-zt/cmake/switch.toolchain.cmake \
+          cmake -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/cmake/switch.toolchain.cmake \
                 -DBUILD_STATIC_LIB=ON \
                 -DBUILD_SHARED_LIB=OFF \
                 -DBUILD_HOST_SELFTEST=OFF \
