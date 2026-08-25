@@ -44,7 +44,7 @@ export NROFLAGS += --nacp=$(CURDIR)/$(TARGET).nacp
 export APP_TITLE := ZeroTier Switch
 export APP_AUTHOR := switch-ldn-zt
 export APP_VERSION := 0.1.0
-export NACPFLAGS += --titleid=0100000000000ZT0
+export NACPFLAGS += --titleid=0100000000000A01
 
 .PHONY: all $(BUILD) clean
 
