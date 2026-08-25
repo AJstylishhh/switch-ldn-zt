@@ -59,14 +59,16 @@ jobs:
             -DALLOW_INSTALL_TARGET=OFF \
             -DZTS_DISABLE_CENTRAL_API=ON \
             -DSWITCH=ON \
-            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext" \
-            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext"
+            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext" \
+            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext"
 
-      - name: Verify Switch flags
+      - name: Verify Switch flags and lwIP port
         working-directory: libzt
         run: |
           set -eu
           grep -R -- "-D__SWITCH__" build-switch/CMakeFiles | head -20
+          test -f ext/lwip-contrib/ports/unix/port/include/arch/cc.h
+          grep -R -- "lwip-contrib/ports/unix/port" build-switch/CMakeFiles | head -20
 
       - name: Build libzt static library
         working-directory: libzt
