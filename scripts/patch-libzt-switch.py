@@ -23,12 +23,18 @@ if block not in s:
     p.write_text(s)
 
 # Utils: Switch has strtok(), not POSIX strtok_r().
-replace_once(
-    'libzt/ext/ZeroTierOne/node/Utils.hpp',
-    r'(\s*static inline char\* stok\(char\* str, const char\* delim, char\*\* saveptr\)\s*\{\s*)#ifdef __WINDOWS__.*?#endif\s*\}\s*',
-    r'\1#ifdef __WINDOWS__\n\t\treturn strtok_s(str, delim, saveptr);\n#elif defined(__SWITCH__)\n\t\t(void)saveptr;\n\t\treturn strtok(str, delim);\n#else\n\t\treturn strtok_r(str, delim, saveptr);\n#endif\n\t}\n',
-    flags=re.S,
+# Match the function by its name and stop at strToUInt instead of depending on
+# exact whitespace used by a particular upstream libzt revision.
+utils = Path('libzt/ext/ZeroTierOne/node/Utils.hpp')
+s = utils.read_text()
+pattern = re.compile(
+    r'(?ms)^\s*static\s+inline\s+char\s*\*\s*stok\s*\(.*?\n\s*static\s+inline\s+unsigned\s+int\s+strToUInt\s*\(const\s+char\s*\*\s*s\)'
 )
+replacement = '''\n\tstatic inline char* stok(char* str, const char* delim, char** saveptr)\n\t{\n#ifdef __WINDOWS__\n\t\treturn strtok_s(str, delim, saveptr);\n#elif defined(__SWITCH__)\n\t\t(void)saveptr;\n\t\treturn strtok(str, delim);\n#else\n\t\treturn strtok_r(str, delim, saveptr);\n#endif\n\t}\n\n\tstatic inline unsigned int strToUInt(const char* s)'''
+ns, count = pattern.subn(replacement, s, count=1)
+if count != 1:
+    raise SystemExit('Utils.hpp stok function not found')
+utils.write_text(ns)
 
 # Binder: no Linux getifaddrs on Switch; use wildcard sockets.
 replace_once(
@@ -39,9 +45,12 @@ replace_once(
 p = Path('libzt/ext/ZeroTierOne/osdep/Binder.hpp')
 s = p.read_text()
 if 'interfacesEnumerated = false;' not in s:
+    marker = 'bool interfacesEnumerated = true;'
+    if marker not in s:
+        raise SystemExit('Binder.hpp interface enumeration marker not found')
     s = s.replace(
-        'bool interfacesEnumerated = true;',
-        'bool interfacesEnumerated = true;\n#ifdef __SWITCH__\n\t\tinterfacesEnumerated = false;\n#endif',
+        marker,
+        marker + '\n#ifdef __SWITCH__\n\t\tinterfacesEnumerated = false;\n#endif',
         1,
     )
     p.write_text(s)
