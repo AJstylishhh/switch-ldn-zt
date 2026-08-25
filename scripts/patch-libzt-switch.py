@@ -35,22 +35,13 @@ if count != 1:
 utils.write_text(ns)
 
 # Binder: Switch cannot enumerate host interfaces with Linux getifaddrs().
-# Do not merely hide the include: hide the entire fallback enumeration block.
 binder = Path('libzt/ext/ZeroTierOne/osdep/Binder.hpp')
 bs = binder.read_text()
-if '#ifndef __SWITCH__\n#if ! defined(__ANDROID__)' not in bs:
-    start = '#if ! defined(__ANDROID__)\t // getifaddrs() freeifaddrs() not available on Android'
-    marker = '#endif\t // ZT_EXTOSDEP'
-    start_i = bs.find(start)
-    marker_i = bs.find(marker, start_i if start_i >= 0 else 0)
-    if start_i < 0 or marker_i < 0:
-        raise SystemExit('Binder.hpp getifaddrs block markers not found')
-    bs = bs[:start_i] + '#ifndef __SWITCH__\n' + bs[start_i:marker_i] + '#endif\n\n' + bs[marker_i:]
 
-# Keep the header available for non-Switch builds; Switch skips the block above.
+# Keep the header conditional for non-Switch builds.
 if '#ifndef __SWITCH__\n#include <ifaddrs.h>\n#endif' not in bs:
     bs2, count = re.subn(
-        r'#include <ifaddrs\.h>',
+        r'#include\s*<ifaddrs\.h>',
         '#ifndef __SWITCH__\n#include <ifaddrs.h>\n#endif',
         bs,
         count=1,
@@ -59,35 +50,40 @@ if '#ifndef __SWITCH__\n#include <ifaddrs.h>\n#endif' not in bs:
         raise SystemExit('Binder.hpp ifaddrs include not found')
     bs = bs2
 
-# Ensure the wildcard fallback is selected on Switch.
+# Wrap the complete getifaddrs fallback block. Use tolerant boundaries because
+# upstream Binder.hpp formatting varies by release.
+if '#ifdef __SWITCH__\n\t\t\tinterfacesEnumerated = false;\n#else\n' not in bs:
+    start_re = re.compile(r'(?m)^\s*#if\s*!\s*defined\(__ANDROID__\).*getifaddrs\(.*$')
+    start_match = start_re.search(bs)
+    end_matches = list(re.finditer(r'(?m)^\s*#endif\s*//\s*ZT_EXTOSDEP\s*$', bs))
+    if not start_match or not end_matches:
+        raise SystemExit('Binder.hpp getifaddrs block could not be located safely')
+    end_match = end_matches[-1]
+    if end_match.start() <= start_match.start():
+        raise SystemExit('Binder.hpp getifaddrs block boundaries are invalid')
+    block_text = bs[start_match.start():end_match.start()]
+    wrapped = '#ifdef __SWITCH__\n\t\t\tinterfacesEnumerated = false;\n#else\n' + block_text + '\n#endif\n'
+    bs = bs[:start_match.start()] + wrapped + bs[end_match.start():]
+
+# The wildcard fallback should be selected when interface enumeration is skipped.
 if 'interfacesEnumerated = false;' not in bs:
     marker = 'bool interfacesEnumerated = true;'
-    if marker in bs:
-        bs = bs.replace(
-            marker,
-            marker + '\n#ifdef __SWITCH__\n\t\tinterfacesEnumerated = false;\n#endif',
-            1,
-        )
-    else:
+    if marker not in bs:
         raise SystemExit('Binder.hpp interface enumeration marker not found')
+    bs = bs.replace(
+        marker,
+        marker + '\n#ifdef __SWITCH__\n\t\tinterfacesEnumerated = false;\n#endif',
+        1,
+    )
 
 binder.write_text(bs)
 
-# Phy: the Switch runtime does not provide Unix-domain sockets. Keep the upstream
-# Unix socket implementation available for normal UNIX builds, but make the
-# sockaddr_un cleanup and Unix-socket helper code compile safely on Switch by
-# providing a small compatibility definition and avoiding the missing system header.
-phy = Path('libzt/ext/ZeroTierOne/osdep/Phy.hpp')
-ps = phy.read_text()
-ps2, count = re.subn(
-    r'#include <sys/un\.h>',
+# Phy: hide the Unix-domain socket system header on Switch.
+replace_once(
+    'libzt/ext/ZeroTierOne/osdep/Phy.hpp',
+    r'#include\s*<sys/un\.h>',
     '#ifndef __SWITCH__\n#include <sys/un.h>\n#endif',
-    ps,
-    count=1,
 )
-if count != 1:
-    raise SystemExit('Phy.hpp sys/un.h include not found')
-phy.write_text(ps2)
 
 # CMake: do not link desktop port mapper or NAT helper objects for Switch.
 cm = Path('libzt/CMakeLists.txt')
@@ -129,9 +125,8 @@ for rel in (
             hs = '#include <stdexcept>\n' + hs
         hp.write_text(hs)
 
-# Switch does not ship Unix-domain-socket headers. Supply only the struct needed by
-# the generic Phy implementation so the source can compile; the Unix-domain path is
-# not used by the Switch integration.
+# Switch does not ship Unix-domain-socket headers. Supply the small struct needed
+# by generic source that names sockaddr_un.
 sys_un = Path('libzt/ext/sys/un.h')
 sys_un.parent.mkdir(parents=True, exist_ok=True)
 sys_un.write_text(
