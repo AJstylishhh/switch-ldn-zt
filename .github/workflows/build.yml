@@ -56,32 +56,68 @@ jobs:
         run: |
           set -eu
 
-          # Binder: do not pull Linux interface-enumeration headers on Switch.
-          sed -i '/^[[:space:]]*#include <ifaddrs.h>$/s/^/#ifndef __SWITCH__\n/; /#include <ifaddrs.h>/a #endif' ext/ZeroTierOne/osdep/Binder.hpp
+          # ZeroTier expects UNIX/POSIX networking primitives on non-Windows targets.
+          # Switch/libnx provides the POSIX socket APIs but does not advertise itself as Linux/BSD.
+          python3 - <<'PY'
+          from pathlib import Path
 
-          # Phy: sys/un.h is a Unix-domain-socket header unavailable on Switch.
-          sed -i '/^[[:space:]]*#include <sys\/un.h>$/s/^/#ifndef __SWITCH__\n/; /#include <sys\/un.h>/a #endif' ext/ZeroTierOne/osdep/Phy.hpp
+          # Constants.hpp: make the Switch build use the UNIX-like code paths.
+          p = Path('ext/ZeroTierOne/node/Constants.hpp')
+          s = p.read_text()
+          needle = '#ifndef __UNIX_LIKE__\n#define __UNIX_LIKE__\n#endif\n'
+          if '__SWITCH__' not in s:
+              raise SystemExit('Constants.hpp does not contain expected Switch context')
+          if '#ifdef __SWITCH__\n#ifndef __UNIX_LIKE__' not in s:
+              marker = '#ifdef __APPLE__\n'
+              insert = '#ifdef __SWITCH__\n#ifndef __UNIX_LIKE__\n#define __UNIX_LIKE__\n#endif\n#endif\n\n'
+              if marker not in s:
+                  raise SystemExit('Constants.hpp insertion marker not found')
+              s = s.replace(marker, insert + marker, 1)
+          p.write_text(s)
 
-          # Utils: Switch has strtok(), but not POSIX strtok_r().
-          sed -i '/return strtok_r(str,delim,saveptr);/i #ifdef __SWITCH__\n        return strtok(str,delim);\n#else' ext/ZeroTierOne/node/Utils.hpp
-          sed -i '0,/#endif/{//b}; /#endif/!b' ext/ZeroTierOne/node/Utils.hpp >/dev/null 2>&1 || true
+          # Utils.hpp: replace the whole tokenization helper cleanly; no fragile sed edits.
+          p = Path('ext/ZeroTierOne/node/Utils.hpp')
+          s = p.read_text()
+          old = '''\tstatic inline char* stok(char* str, const char* delim, char** saveptr)\n\t{\n#ifdef __WINDOWS__\n\t\treturn strtok_s(str, delim, saveptr);\n#else\n\t\treturn strtok_r(str, delim, saveptr);\n#endif\n\t}\n'''
+          new = '''\tstatic inline char* stok(char* str, const char* delim, char** saveptr)\n\t{\n#ifdef __WINDOWS__\n\t\treturn strtok_s(str, delim, saveptr);\n#elif defined(__SWITCH__)\n\t\t(void)saveptr;\n\t\treturn strtok(str, delim);\n#else\n\t\treturn strtok_r(str, delim, saveptr);\n#endif\n\t}\n'''
+          if old not in s:
+              raise SystemExit('Utils.hpp stok block not found')
+          p.write_text(s.replace(old, new, 1))
 
-          # Make Binder skip interface enumeration on Switch so it can use wildcard sockets.
-          sed -i '/bool interfacesEnumerated = true;/a #ifdef __SWITCH__\n        interfacesEnumerated = false;\n#endif' ext/ZeroTierOne/osdep/Binder.hpp
+          # Binder.hpp: hide Linux-only interface enumeration headers and use wildcard sockets on Switch.
+          p = Path('ext/ZeroTierOne/osdep/Binder.hpp')
+          s = p.read_text()
+          s = s.replace('#include <ifaddrs.h>', '#ifndef __SWITCH__\n#include <ifaddrs.h>\n#endif', 1)
+          marker = 'bool interfacesEnumerated = true;'
+          if marker in s and '#ifdef __SWITCH__\n\t\tinterfacesEnumerated = false;' not in s:
+              s = s.replace(marker, marker + '\n#ifdef __SWITCH__\n\t\tinterfacesEnumerated = false;\n#endif', 1)
+          p.write_text(s)
+
+          # Phy.hpp: sys/un.h is unavailable on Switch and is not needed by the UDP path.
+          p = Path('ext/ZeroTierOne/osdep/Phy.hpp')
+          s = p.read_text()
+          s = s.replace('#include <sys/un.h>', '#ifndef __SWITCH__\n#include <sys/un.h>\n#endif', 1)
+          p.write_text(s)
+          PY
 
       - name: Patch libzt CMake for Switch
         working-directory: libzt
         run: |
           set -eu
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('CMakeLists.txt')
+          s = p.read_text()
 
-          # Remove the desktop PortMapper source from the ZeroTier core.
-          sed -i 's|[[:space:]]\${ZTO_SRC_DIR}/osdep/PortMapper.cpp||' CMakeLists.txt
-
-          # Remove desktop NAT helper objects from the embedded static library target.
-          sed -i '/\$<TARGET_OBJECTS:natpmp_pic> \$<TARGET_OBJECTS:miniupnpc_pic>/d' CMakeLists.txt
-
-          # Do not add MiniUPnP compile flags when building for Switch.
-          sed -i 's/set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")/if(NOT SWITCH)\n    set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")\nendif()/' CMakeLists.txt
+          s = s.replace('${ZTO_SRC_DIR}/osdep/PortMapper.cpp', '', 1)
+          s = s.replace('$<TARGET_OBJECTS:natpmp_pic> $<TARGET_OBJECTS:miniupnpc_pic>', '', 1)
+          s = s.replace(
+              'set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")',
+              'if(NOT SWITCH)\n    set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")\nendif()',
+              1,
+          )
+          p.write_text(s)
+          PY
 
       - name: Configure libzt
         working-directory: libzt
