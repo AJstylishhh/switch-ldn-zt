@@ -22,6 +22,7 @@ if block not in s:
     s = s.replace(marker, block + marker, 1)
     p.write_text(s)
 
+
 # Utils: Switch has strtok(), not POSIX strtok_r().
 utils = Path('libzt/ext/ZeroTierOne/node/Utils.hpp')
 s = utils.read_text()
@@ -34,11 +35,11 @@ if count != 1:
     raise SystemExit('Utils.hpp stok function not found')
 utils.write_text(ns)
 
+
 # Binder: Switch cannot enumerate host interfaces with Linux getifaddrs().
 binder = Path('libzt/ext/ZeroTierOne/osdep/Binder.hpp')
 bs = binder.read_text()
 
-# Keep the header conditional for non-Switch builds.
 if '#ifndef __SWITCH__\n#include <ifaddrs.h>\n#endif' not in bs:
     bs2, count = re.subn(
         r'#include\s*<ifaddrs\.h>',
@@ -50,22 +51,19 @@ if '#ifndef __SWITCH__\n#include <ifaddrs.h>\n#endif' not in bs:
         raise SystemExit('Binder.hpp ifaddrs include not found')
     bs = bs2
 
-# On Switch, skip the entire generic getifaddrs() fallback with a single
-# preprocessor-condition edit. This avoids depending on fragile multiline markers.
-start = '#if ! defined(__ANDROID__)\t // getifaddrs() freeifaddrs() not available on Android'
-replacement_start = '#if ! defined(__ANDROID__) && ! defined(__SWITCH__)\t // getifaddrs() unavailable on Switch'
-if start in bs:
-    bs = bs.replace(start, replacement_start, 1)
-else:
-    # Tolerate whitespace differences in the upstream source.
-    pattern = re.compile(r'^\s*#if\s*!\s*defined\(__ANDROID__\).*getifaddrs\(\).*$', re.MULTILINE)
-    bs2, count = pattern.subn(replacement_start, bs, count=1)
-    if count != 1:
+# The upstream fallback enumeration is not usable on Switch. Guard only its
+# top-level preprocessor line; this avoids fragile multiline block matching.
+replacement_start = '#if ! defined(__ANDROID__) && ! defined(__SWITCH__)\t // getifaddrs unavailable on Switch'
+pattern = re.compile(r'^\s*#if\s*!\s*defined\(__ANDROID__\).*getifaddrs\(\).*$', re.MULTILINE)
+bs2, count = pattern.subn(replacement_start, bs, count=1)
+if count != 1:
+    # If already patched, leave it alone. Otherwise fail clearly.
+    if replacement_start not in bs:
         raise SystemExit('Binder.hpp getifaddrs guard line not found')
-    bs = bs2
+    bs2 = bs
+bs = bs2
 
-# Because Switch skips the block above, force the existing wildcard-address
-# fallback path to be selected.
+# Force the existing wildcard-address fallback on Switch.
 if 'interfacesEnumerated = false;' not in bs:
     marker = 'bool interfacesEnumerated = true;'
     if marker not in bs:
@@ -78,12 +76,57 @@ if 'interfacesEnumerated = false;' not in bs:
 
 binder.write_text(bs)
 
-# Phy: hide the Unix-domain socket system header on Switch.
-replace_once(
-    'libzt/ext/ZeroTierOne/osdep/Phy.hpp',
+
+# Phy: the Switch runtime does not provide Unix-domain sockets. The generic Phy
+# template still contains a few Unix-only helpers because __UNIX_LIKE__ is useful
+# for other core code. Guard the system header and the cleanup that dereferences
+# sockaddr_un so Switch builds do not require that type.
+phy = Path('libzt/ext/ZeroTierOne/osdep/Phy.hpp')
+ps = phy.read_text()
+
+ps2, count = re.subn(
     r'#include\s*<sys/un\.h>',
     '#ifndef __SWITCH__\n#include <sys/un.h>\n#endif',
+    ps,
+    count=1,
 )
+if count != 1:
+    # Already patched is fine.
+    if '#ifndef __SWITCH__\n#include <sys/un.h>\n#endif' not in ps:
+        raise SystemExit('Phy.hpp sys/un.h include not found')
+    ps2 = ps
+ps = ps2
+
+# In close(), never touch sockaddr_un on Switch because Switch does not expose
+# AF_UNIX/Unix-domain sockets. Keep the upstream behavior on normal Unix builds.
+cleanup_pattern = re.compile(
+    r'(?ms)^\s*#ifdef __UNIX_LIKE__\s*\n\s*if \(sws\.type == ZT_PHY_SOCKET_UNIX_LISTEN\)\s*\n\s*::unlink\(\(\(struct sockaddr_un \*\)\(\&\(sws\.saddr\)\)\)->sun_path\);\s*\n\s*#endif\s*// __UNIX_LIKE__'
+)
+cleanup_replacement = '''\n#ifdef __UNIX_LIKE__\n#if !defined(__SWITCH__)\n\t\tif (sws.type == ZT_PHY_SOCKET_UNIX_LISTEN)\n\t\t\t::unlink(((struct sockaddr_un*)(&(sws.saddr)))->sun_path);\n#endif\t // !__SWITCH__\n#endif\t // __UNIX_LIKE__'''
+ps2, count = cleanup_pattern.subn(cleanup_replacement, ps, count=1)
+if count != 1:
+    if 'if (!defined(__SWITCH__))' in ps or 'if (sws.type == ZT_PHY_SOCKET_UNIX_LISTEN)' not in ps:
+        raise SystemExit('Phy.hpp Unix-socket cleanup block not found')
+ps = ps2
+phy.write_text(ps)
+
+
+# Utils.cpp: sys/uio.h is a desktop/Unix header and is not needed by the Switch
+# build. Keep it for normal Unix builds.
+utils_cpp = Path('libzt/ext/ZeroTierOne/node/Utils.cpp')
+us = utils_cpp.read_text()
+u2, count = re.subn(
+    r'#include\s*<sys/uio\.h>',
+    '#ifndef __SWITCH__\n#include <sys/uio.h>\n#endif',
+    us,
+    count=1,
+)
+if count != 1:
+    if '#ifndef __SWITCH__\n#include <sys/uio.h>\n#endif' not in us:
+        raise SystemExit('Utils.cpp sys/uio.h include not found')
+    u2 = us
+utils_cpp.write_text(u2)
+
 
 # CMake: do not link desktop port mapper or NAT helper objects for Switch.
 cm = Path('libzt/CMakeLists.txt')
@@ -97,6 +140,7 @@ cs = cs.replace(
 )
 cm.write_text(cs)
 
+
 # lwIP's generic arch.h defines ssize_t as int when SSIZE_MAX is absent. devkitA64
 # already provides ssize_t as long, so advertise SSIZE_MAX first.
 cc = Path('libzt/ext/lwip-contrib/ports/unix/port/include/arch/cc.h')
@@ -109,6 +153,7 @@ if compat not in ccs:
     else:
         ccs = compat + ccs
     cc.write_text(ccs)
+
 
 # Prometheus-lite headers used by ZeroTier Metrics.cpp rely on transitive includes
 # on desktop compilers; devkitA64 is stricter.
@@ -125,21 +170,5 @@ for rel in (
             hs = '#include <stdexcept>\n' + hs
         hp.write_text(hs)
 
-# Switch does not ship Unix-domain-socket headers. Supply the small struct needed
-# by generic source that names sockaddr_un.
-sys_un = Path('libzt/ext/sys/un.h')
-sys_un.parent.mkdir(parents=True, exist_ok=True)
-sys_un.write_text(
-    '#pragma once\n'
-    '#include <sys/types.h>\n'
-    '#include <sys/socket.h>\n'
-    '#ifndef AF_UNIX\n'
-    '#define AF_UNIX 1\n'
-    '#endif\n'
-    'struct sockaddr_un {\n'
-    '    sa_family_t sun_family;\n'
-    '    char sun_path[108];\n'
-    '};\n'
-)
 
 print('Switch libzt source patching completed successfully.')
