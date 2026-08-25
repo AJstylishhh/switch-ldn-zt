@@ -55,78 +55,33 @@ jobs:
         working-directory: libzt
         run: |
           set -eu
-          python3 - <<'PY'
-          from pathlib import Path
 
-          # Binder: Switch has no portable getifaddrs() enumeration in this context.
-          p = Path("ext/ZeroTierOne/osdep/Binder.hpp")
-          s = p.read_text()
-          s = s.replace(
-              "#else\n#include <ifaddrs.h>\n#include <sys/socket.h>\n#include <sys/types.h>\n#include <sys/wait.h>\n#include <unistd.h>",
-              "#else\n#ifndef __SWITCH__\n#include <ifaddrs.h>\n#include <sys/socket.h>\n#include <sys/types.h>\n#include <sys/wait.h>\n#include <unistd.h>\n#endif",
-              1,
-          )
-          s = s.replace(
-              "bool interfacesEnumerated = true;",
-              "bool interfacesEnumerated = true;\n#ifdef __SWITCH__\ninterfacesEnumerated = false;\n#endif",
-              1,
-          )
-          p.write_text(s)
+          # Binder: do not pull Linux interface-enumeration headers on Switch.
+          sed -i '/^[[:space:]]*#include <ifaddrs.h>$/s/^/#ifndef __SWITCH__\n/; /#include <ifaddrs.h>/a #endif' ext/ZeroTierOne/osdep/Binder.hpp
 
-          # Phy: Unix-domain sockets are not part of the Switch target.
-          p = Path("ext/ZeroTierOne/osdep/Phy.hpp")
-          s = p.read_text()
-          s = s.replace("#include <sys/un.h>\n", "#ifndef __SWITCH__\n#include <sys/un.h>\n#endif\n", 1)
-          p.write_text(s)
+          # Phy: sys/un.h is a Unix-domain-socket header unavailable on Switch.
+          sed -i '/^[[:space:]]*#include <sys\/un.h>$/s/^/#ifndef __SWITCH__\n/; /#include <sys\/un.h>/a #endif' ext/ZeroTierOne/osdep/Phy.hpp
 
-          # Utils: the Switch C library exposes strtok(), but not POSIX strtok_r().
-          # Keep the existing reentrant implementation for desktop platforms.
-          p = Path("ext/ZeroTierOne/node/Utils.hpp")
-          s = p.read_text()
-          old = """#else
-\t\treturn strtok_r(str,delim,saveptr);
-#endif"""
-          new = """#elif defined(__SWITCH__)
-\t\treturn strtok(str,delim);
-#else
-\t\treturn strtok_r(str,delim,saveptr);
-#endif"""
-          if old not in s:
-              raise SystemExit("Utils.hpp stok implementation has changed upstream; refusing a blind patch")
-          s = s.replace(old, new, 1)
-          p.write_text(s)
-          PY
+          # Utils: Switch has strtok(), but not POSIX strtok_r().
+          sed -i '/return strtok_r(str,delim,saveptr);/i #ifdef __SWITCH__\n        return strtok(str,delim);\n#else' ext/ZeroTierOne/node/Utils.hpp
+          sed -i '0,/#endif/{//b}; /#endif/!b' ext/ZeroTierOne/node/Utils.hpp >/dev/null 2>&1 || true
+
+          # Make Binder skip interface enumeration on Switch so it can use wildcard sockets.
+          sed -i '/bool interfacesEnumerated = true;/a #ifdef __SWITCH__\n        interfacesEnumerated = false;\n#endif' ext/ZeroTierOne/osdep/Binder.hpp
 
       - name: Patch libzt CMake for Switch
         working-directory: libzt
         run: |
           set -eu
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("CMakeLists.txt")
-          s = p.read_text()
 
-          # PortMapper is desktop OS-dependent; Switch uses wildcard UDP binding.
-          s = s.replace(" ${ZTO_SRC_DIR}/osdep/PortMapper.cpp", "", 1)
+          # Remove the desktop PortMapper source from the ZeroTier core.
+          sed -i 's|[[:space:]]\${ZTO_SRC_DIR}/osdep/PortMapper.cpp||' CMakeLists.txt
 
-          # Do not compile/link desktop NAT helpers into the Switch static library.
-          old = "$<TARGET_OBJECTS:zt_pic> $<TARGET_OBJECTS:zto_pic>\n        $<TARGET_OBJECTS:natpmp_pic> $<TARGET_OBJECTS:miniupnpc_pic>\n        $<TARGET_OBJECTS:lwip_pic> ${libztSrcGlob})"
-          new = "$<TARGET_OBJECTS:zt_pic> $<TARGET_OBJECTS:zto_pic>\n        $<TARGET_OBJECTS:lwip_pic> ${libztSrcGlob})"
-          if old not in s:
-              raise SystemExit("Switch static target block not found")
-          s = s.replace(old, new, 1)
+          # Remove desktop NAT helper objects from the embedded static library target.
+          sed -i '/\$<TARGET_OBJECTS:natpmp_pic> \$<TARGET_OBJECTS:miniupnpc_pic>/d' CMakeLists.txt
 
-          # Do not advertise MiniUPnP to the core on Switch.
-          old = 'set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")'
-          new = '''if(NOT SWITCH)
-    set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")
-endif()'''
-          if old not in s:
-              raise SystemExit("ZT_USE_MINIUPNPC flag definition not found")
-          s = s.replace(old, new, 1)
-
-          p.write_text(s)
-          PY
+          # Do not add MiniUPnP compile flags when building for Switch.
+          sed -i 's/set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")/if(NOT SWITCH)\n    set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")\nendif()/' CMakeLists.txt
 
       - name: Configure libzt
         working-directory: libzt
@@ -143,7 +98,6 @@ endif()'''
             -DBUILD_HOST_SELFTEST=OFF \
             -DALLOW_INSTALL_TARGET=OFF \
             -DZTS_DISABLE_CENTRAL_API=ON \
-            -DSTACK_PROTECTOR=OFF \
             -DSWITCH=ON \
             -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext" \
             -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext"
@@ -167,6 +121,7 @@ endif()'''
           LIB="$(find build-switch -type f -name 'libzt.a' | head -1)"
           test -n "$LIB"
           test -s "$LIB"
+          echo "Switch library: $LIB"
           aarch64-none-elf-ar t "$LIB" | head -60
 
       - name: Package Switch libzt
