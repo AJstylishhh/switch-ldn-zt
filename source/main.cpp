@@ -44,15 +44,33 @@ static void print_event(void* ptr)
     }
 }
 
-static bool read_network_id(uint64_t& out)
+static bool read_text_file(const char* path, char* out, size_t out_len)
 {
-    FILE* f = std::fopen("sdmc:/config/zerotier-switch/network_id.txt", "rb");
+    if (!out || out_len < 2) return false;
+
+    FILE* f = std::fopen(path, "rb");
     if (!f) return false;
 
-    char buf[64] = {};
-    const size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+    const size_t n = std::fread(out, 1, out_len - 1, f);
     std::fclose(f);
     if (n == 0) return false;
+
+    out[n] = '\0';
+
+    // Strip simple whitespace/newlines so config files can be edited normally.
+    while (n > 0 && (out[n - 1] == '\n' || out[n - 1] == '\r' || out[n - 1] == ' ' || out[n - 1] == '\t')) {
+        out[n - 1] = '\0';
+    }
+
+    return out[0] != '\0';
+}
+
+static bool read_network_id(uint64_t& out)
+{
+    char buf[64] = {};
+    if (!read_text_file("sdmc:/config/zerotier-switch/network_id.txt", buf, sizeof(buf))) {
+        return false;
+    }
 
     char* end = nullptr;
     const unsigned long long value = std::strtoull(buf, &end, 16);
@@ -60,6 +78,104 @@ static bool read_network_id(uint64_t& out)
 
     out = static_cast<uint64_t>(value);
     return true;
+}
+
+static void run_transport_probe()
+{
+    char local_addr[ZTS_IP_MAX_STR_LEN] = {};
+    if (!zts_addr_is_assigned(g_network_id, ZTS_AF_INET)) {
+        printf("[PROBE] No ZeroTier IPv4 address assigned yet.\n");
+        return;
+    }
+
+    if (zts_addr_get_str(g_network_id, ZTS_AF_INET, local_addr, sizeof(local_addr)) != ZTS_ERR_OK) {
+        printf("[PROBE] Failed to obtain ZeroTier IPv4 address (errno=%d).\n", zts_errno);
+        return;
+    }
+
+    printf("[PROBE] ZeroTier IPv4: %s\n", local_addr);
+    printf("[PROBE] This is a transport-only test; ldn_mitm is not integrated yet.\n");
+
+    char role[16] = {};
+    if (!read_text_file("sdmc:/config/zerotier-switch/test_role.txt", role, sizeof(role))) {
+        printf("[PROBE] No test_role.txt; skipping socket probe.\n");
+        printf("[PROBE] Use 'server' on one Switch or 'client' on the other.\n");
+        return;
+    }
+
+    constexpr unsigned int port = 11452;
+
+    if (std::strcmp(role, "server") == 0) {
+        printf("[PROBE] TCP SERVER %s:%u\n", local_addr, port);
+        printf("[PROBE] Waiting for a ZeroTier peer...\n");
+
+        char remote_addr[ZTS_INET6_ADDRSTRLEN] = {};
+        unsigned short remote_port = 0;
+        const int fd = zts_tcp_server(local_addr, port, remote_addr, sizeof(remote_addr), &remote_port);
+        if (fd < 0) {
+            printf("[PROBE] zts_tcp_server failed: fd=%d errno=%d\n", fd, zts_errno);
+            return;
+        }
+
+        printf("[PROBE] Accepted %s:%u\n", remote_addr, remote_port);
+
+        char buf[128] = {};
+        const int n = zts_read(fd, buf, sizeof(buf) - 1);
+        if (n < 0) {
+            printf("[PROBE] zts_read failed: %d errno=%d\n", n, zts_errno);
+        } else {
+            buf[n] = '\0';
+            printf("[PROBE] Received %d bytes: %s\n", n, buf);
+            const int sent = zts_write(fd, buf, n);
+            printf("[PROBE] Echo result: %d errno=%d\n", sent, zts_errno);
+        }
+
+        zts_close(fd);
+        printf("[PROBE] Server test complete.\n");
+        return;
+    }
+
+    if (std::strcmp(role, "client") == 0) {
+        char peer_addr[ZTS_IP_MAX_STR_LEN] = {};
+        if (!read_text_file("sdmc:/config/zerotier-switch/peer_ip.txt", peer_addr, sizeof(peer_addr))) {
+            printf("[PROBE] client mode requires peer_ip.txt.\n");
+            return;
+        }
+
+        printf("[PROBE] TCP CLIENT -> %s:%u\n", peer_addr, port);
+        int fd = -1;
+        for (int attempt = 0; attempt < 10 && fd < 0; ++attempt) {
+            fd = zts_tcp_client(peer_addr, port);
+            if (fd < 0) {
+                printf("[PROBE] connect attempt %d failed: errno=%d\n", attempt + 1, zts_errno);
+                zts_util_delay(500);
+            }
+        }
+
+        if (fd < 0) {
+            printf("[PROBE] Could not connect to peer.\n");
+            return;
+        }
+
+        const char* msg = "switch-ldn-zt transport probe";
+        const int sent = zts_write(fd, msg, std::strlen(msg));
+        printf("[PROBE] Sent %d bytes.\n", sent);
+
+        char buf[128] = {};
+        const int n = zts_read(fd, buf, sizeof(buf) - 1);
+        if (n < 0) {
+            printf("[PROBE] zts_read failed: %d errno=%d\n", n, zts_errno);
+        } else {
+            buf[n] = '\0';
+            printf("[PROBE] Echoed %d bytes: %s\n", n, buf);
+        }
+
+        zts_close(fd);
+        printf("[PROBE] Client test complete.\n");
+        return;
+    }
+
+    printf("[PROBE] Unknown test_role '%s' (use server/client).\n", role);
 }
 
 int main(int argc, char* argv[])
@@ -149,6 +265,18 @@ int main(int argc, char* argv[])
             waited++;
             consoleUpdate(NULL);
         }
+
+        printf("Waiting for ZeroTier IPv4 assignment...\n");
+        waited = 0;
+        while (appletMainLoop() && !zts_addr_is_assigned(g_network_id, ZTS_AF_INET) && waited < 300) {
+            hidScanInput();
+            if (hidKeysDown(CONTROLLER_P1_AUTO) & KEY_PLUS) goto shutdown;
+            zts_util_delay(100);
+            waited++;
+            consoleUpdate(NULL);
+        }
+
+        run_transport_probe();
     }
 
     printf("\nStatus\n");
