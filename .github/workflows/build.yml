@@ -29,105 +29,19 @@ jobs:
         run: |
           set -eu
           git clone --depth 1 --recurse-submodules https://github.com/zerotier/libzt.git
-          cd libzt
-          echo "libzt commit: $(git rev-parse HEAD)"
-          echo "ZeroTierOne commit: $(git -C ext/ZeroTierOne rev-parse HEAD)"
-          echo "lwIP commit: $(git -C ext/lwip rev-parse HEAD)"
 
       - name: Prepare Switch compatibility headers
         working-directory: libzt
         run: |
           set -eu
           mkdir -p ext/arpa
-          cat > ext/endian.h <<'EOF'
-          #pragma once
-          #define __LITTLE_ENDIAN 1234
-          #define __BIG_ENDIAN 4321
-          #define __BYTE_ORDER __LITTLE_ENDIAN
-          EOF
-          cat > ext/arpa/inet.h <<'EOF'
-          #pragma once
-          #include <sys/socket.h>
-          #include <netinet/in.h>
-          EOF
+          printf '%s\n' '#pragma once' '#define __LITTLE_ENDIAN 1234' '#define __BIG_ENDIAN 4321' '#define __BYTE_ORDER __LITTLE_ENDIAN' > ext/endian.h
+          printf '%s\n' '#pragma once' '#include <sys/socket.h>' '#include <netinet/in.h>' > ext/arpa/inet.h
 
-      - name: Patch Switch platform differences
-        working-directory: libzt
+      - name: Patch libzt for Switch
         run: |
           set -eu
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          # Constants.hpp: Switch must use ZeroTier's UNIX-like code paths.
-          p = Path('ext/ZeroTierOne/node/Constants.hpp')
-          s = p.read_text()
-          block = '#ifdef __SWITCH__\n#ifndef __UNIX_LIKE__\n#define __UNIX_LIKE__\n#endif\n#endif\n\n'
-          if block not in s:
-              marker = '#ifdef __APPLE__\n'
-              if marker not in s:
-                  raise SystemExit('Constants.hpp insertion marker not found')
-              s = s.replace(marker, block + marker, 1)
-              p.write_text(s)
-
-          # Utils.hpp: Switch has strtok(), but not POSIX strtok_r().
-          # Use a regex so harmless upstream whitespace/indentation changes do not break CI.
-          p = Path('ext/ZeroTierOne/node/Utils.hpp')
-          s = p.read_text()
-          pattern = re.compile(
-              r'(static\s+inline\s+char\s*\*\s*stok\s*\(\s*char\s*\*\s*str\s*,\s*const\s+char\s*\*\s*delim\s*,\s*char\s*\*\s*\*\s*saveptr\s*\)\s*\{).*?(^\s*\}\s*)',
-              re.MULTILINE | re.DOTALL,
-          )
-          new = r'''\1
-#ifdef __WINDOWS__
-		return strtok_s(str, delim, saveptr);
-#elif defined(__SWITCH__)
-		(void)saveptr;
-		return strtok(str, delim);
-#else
-		return strtok_r(str, delim, saveptr);
-#endif
-\2'''
-          s2, n = pattern.subn(new, s, count=1)
-          if n != 1:
-              raise SystemExit('Utils.hpp stok function not found')
-          p.write_text(s2)
-
-          # Binder.hpp: hide Linux-only interface enumeration headers and use wildcard sockets on Switch.
-          p = Path('ext/ZeroTierOne/osdep/Binder.hpp')
-          s = p.read_text()
-          s = s.replace('#include <ifaddrs.h>', '#ifndef __SWITCH__\n#include <ifaddrs.h>\n#endif', 1)
-          marker = 'bool interfacesEnumerated = true;'
-          switch_block = marker + '\n#ifdef __SWITCH__\n\t\tinterfacesEnumerated = false;\n#endif'
-          if marker in s and '#ifdef __SWITCH__\n\t\tinterfacesEnumerated = false;' not in s:
-              s = s.replace(marker, switch_block, 1)
-          p.write_text(s)
-
-          # Phy.hpp: sys/un.h is unavailable on Switch and isn't needed for the UDP path.
-          p = Path('ext/ZeroTierOne/osdep/Phy.hpp')
-          s = p.read_text()
-          s = s.replace('#include <sys/un.h>', '#ifndef __SWITCH__\n#include <sys/un.h>\n#endif', 1)
-          p.write_text(s)
-          PY
-
-      - name: Patch libzt CMake for Switch
-        working-directory: libzt
-        run: |
-          set -eu
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('CMakeLists.txt')
-          s = p.read_text()
-
-          s = s.replace('${ZTO_SRC_DIR}/osdep/PortMapper.cpp', '', 1)
-          s = s.replace('$<TARGET_OBJECTS:natpmp_pic> $<TARGET_OBJECTS:miniupnpc_pic>', '', 1)
-          s = s.replace(
-              'set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")',
-              'if(NOT SWITCH)\n    set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")\nendif()',
-              1,
-          )
-          p.write_text(s)
-          PY
+          python3 scripts/patch-libzt-switch.py
 
       - name: Configure libzt
         working-directory: libzt
