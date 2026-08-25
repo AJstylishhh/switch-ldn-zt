@@ -29,12 +29,14 @@ export TOPDIR := $(CURDIR)
 export VPATH := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
 export DEPSDIR := $(CURDIR)/$(BUILD)
 
-# The recursive make runs from $(BUILD), so the wildcard must be rooted at
-# TOPDIR. Otherwise source/main.cpp is not discovered and the linker reports
-# "required symbol main not defined".
+# Discover the application sources while TOPDIR still points at the repository.
+# The recursive make below runs from $(BUILD), so this must be rooted at TOPDIR.
 CPPFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(TOPDIR)/$(dir)/*.cpp)))
 OFILES_SRC := $(CPPFILES:.cpp=.o)
-OFILES := $(OFILES_SRC)
+
+# IMPORTANT: the recursive make receives only exported variables. Export the
+# object list explicitly so source/main.cpp becomes source/main.o and is linked.
+export OFILES := $(OFILES_SRC)
 
 export INCLUDE := $(foreach dir,$(INCLUDES),-I$(TOPDIR)/$(dir)) \
                   $(foreach dir,$(LIBDIRS),-I$(dir)/include) \
@@ -63,6 +65,8 @@ clean:
 
 else
 
+# We are now inside $(BUILD). OFILES is exported by the outer invocation;
+# do not recompute it from the current directory, because source/ is one level up.
 DEPENDS := $(OFILES:.o=.d)
 
 all: $(OUTPUT).nro
