@@ -57,7 +57,6 @@ replacement_start = '#if ! defined(__ANDROID__) && ! defined(__SWITCH__)\t // ge
 pattern = re.compile(r'^\s*#if\s*!\s*defined\(__ANDROID__\).*getifaddrs\(\).*$', re.MULTILINE)
 bs2, count = pattern.subn(replacement_start, bs, count=1)
 if count != 1:
-    # If already patched, leave it alone. Otherwise fail clearly.
     if replacement_start not in bs:
         raise SystemExit('Binder.hpp getifaddrs guard line not found')
     bs2 = bs
@@ -91,7 +90,6 @@ ps2, count = re.subn(
     count=1,
 )
 if count != 1:
-    # Already patched is fine.
     if '#ifndef __SWITCH__\n#include <sys/un.h>\n#endif' not in ps:
         raise SystemExit('Phy.hpp sys/un.h include not found')
     ps2 = ps
@@ -105,7 +103,7 @@ cleanup_pattern = re.compile(
 cleanup_replacement = '''\n#ifdef __UNIX_LIKE__\n#if !defined(__SWITCH__)\n\t\tif (sws.type == ZT_PHY_SOCKET_UNIX_LISTEN)\n\t\t\t::unlink(((struct sockaddr_un*)(&(sws.saddr)))->sun_path);\n#endif\t // !__SWITCH__\n#endif\t // __UNIX_LIKE__'''
 ps2, count = cleanup_pattern.subn(cleanup_replacement, ps, count=1)
 if count != 1:
-    if 'if (!defined(__SWITCH__))' in ps or 'if (sws.type == ZT_PHY_SOCKET_UNIX_LISTEN)' not in ps:
+    if 'if (sws.type == ZT_PHY_SOCKET_UNIX_LISTEN)' not in ps:
         raise SystemExit('Phy.hpp Unix-socket cleanup block not found')
 ps = ps2
 phy.write_text(ps)
@@ -127,6 +125,22 @@ if count != 1:
     u2 = us
 utils_cpp.write_text(u2)
 
+# Utils.cpp: devkitA64 does not provide the Linux getauxval()/AT_HWCAP API.
+# ZeroTier's ARM capability probe is an optimization; on Switch we safely report
+# no runtime-detected optional CPU features and let portable implementations run.
+us = utils_cpp.read_text()
+if '#ifdef __SWITCH__\n\tconst long hwcaps = 0;' not in us:
+    hw2, count = re.subn(
+        r'(?m)^(\s*)const long hwcaps = getauxval\(AT_HWCAP\);',
+        r'\1#ifdef __SWITCH__\n\1const long hwcaps = 0;\n\1#else\n\1const long hwcaps = getauxval(AT_HWCAP);\n\1#endif',
+        us,
+        count=1,
+    )
+    if count != 1:
+        raise SystemExit('Utils.cpp getauxval probe not found')
+    us = hw2
+utils_cpp.write_text(us)
+
 
 # CMake: do not link desktop port mapper or NAT helper objects for Switch.
 cm = Path('libzt/CMakeLists.txt')
@@ -141,18 +155,27 @@ cs = cs.replace(
 cm.write_text(cs)
 
 
-# lwIP's generic arch.h defines ssize_t as int when SSIZE_MAX is absent. devkitA64
-# already provides ssize_t as long, so advertise SSIZE_MAX first.
-cc = Path('libzt/ext/lwip-contrib/ports/unix/port/include/arch/cc.h')
-ccs = cc.read_text()
-compat = '#include <limits.h>\n#ifndef SSIZE_MAX\n#define SSIZE_MAX LONG_MAX\n#endif\n'
-if compat not in ccs:
+# lwIP: libzt's Generic Switch toolchain does not automatically add the Unix port
+# include directory, so provide arch/cc.h at the path lwIP itself searches.
+port_cc = Path('libzt/ext/lwip-contrib/ports/unix/port/include/arch/cc.h')
+if not port_cc.exists():
+    raise SystemExit('lwIP Unix port arch/cc.h not found')
+port_cc_text = port_cc.read_text()
+if '#ifndef SSIZE_MAX' not in port_cc_text:
+    compat = '#include <limits.h>\n#ifndef SSIZE_MAX\n#define SSIZE_MAX LONG_MAX\n#endif\n'
     marker = '#include <sys/time.h>'
-    if marker in ccs:
-        ccs = ccs.replace(marker, compat + marker, 1)
+    if marker in port_cc_text:
+        port_cc_text = port_cc_text.replace(marker, compat + marker, 1)
     else:
-        ccs = compat + ccs
-    cc.write_text(ccs)
+        port_cc_text = compat + port_cc_text
+    port_cc.write_text(port_cc_text)
+
+lwip_cc_wrapper = Path('libzt/ext/lwip/src/include/arch/cc.h')
+lwip_cc_wrapper.parent.mkdir(parents=True, exist_ok=True)
+lwip_cc_wrapper.write_text(
+    '#pragma once\n'
+    '#include "../../../../lwip-contrib/ports/unix/port/include/arch/cc.h"\n'
+)
 
 
 # Prometheus-lite headers used by ZeroTier Metrics.cpp rely on transitive includes
