@@ -23,8 +23,7 @@ if block not in s:
     p.write_text(s)
 
 # Utils: Switch has strtok(), not POSIX strtok_r().
-# Match the function by its name and stop at strToUInt instead of depending on
-# exact whitespace used by a particular upstream libzt revision.
+# Match the function by its name and stop at strToUInt so whitespace changes do not break CI.
 utils = Path('libzt/ext/ZeroTierOne/node/Utils.hpp')
 s = utils.read_text()
 pattern = re.compile(
@@ -62,9 +61,18 @@ replace_once(
     '#ifndef __SWITCH__\n#include <sys/un.h>\n#endif',
 )
 
-# CMake: don't build desktop port mapper or NAT helpers for Switch.
+# CMake: Switch is not recognized as UNIX by CMake's Generic toolchain, so
+# explicitly select libzt's Unix lwIP port for the threaded socket API.
 p = Path('libzt/CMakeLists.txt')
 s = p.read_text()
+port_marker = 'if(BUILD_WIN)\n    set(LWIP_PORT_DIR ${PROJ_DIR}/ext/lwip-contrib/ports/win32)\nendif()\n'
+switch_port = port_marker + '\nif(SWITCH)\n    set(LWIP_PORT_DIR ${PROJ_DIR}/ext/lwip-contrib/ports/unix/port)\nendif()\n'
+if 'if(SWITCH)\n    set(LWIP_PORT_DIR ${PROJ_DIR}/ext/lwip-contrib/ports/unix/port)' not in s:
+    if port_marker not in s:
+        raise SystemExit('CMake lwIP port insertion marker not found')
+    s = s.replace(port_marker, switch_port, 1)
+
+# Don't build desktop port mapper or NAT helpers for Switch.
 s = s.replace('${ZTO_SRC_DIR}/osdep/PortMapper.cpp', '', 1)
 s = s.replace('$<TARGET_OBJECTS:natpmp_pic> $<TARGET_OBJECTS:miniupnpc_pic>', '', 1)
 s = s.replace(
