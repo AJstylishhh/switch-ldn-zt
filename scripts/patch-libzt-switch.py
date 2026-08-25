@@ -37,7 +37,7 @@ utils.write_text(ns)
 # Binder: no Linux getifaddrs on Switch; use wildcard sockets.
 replace_once(
     'libzt/ext/ZeroTierOne/osdep/Binder.hpp',
-    r'#include <ifaddrs\\.h>',
+    r'#include <ifaddrs\.h>',
     '#ifndef __SWITCH__\n#include <ifaddrs.h>\n#endif',
 )
 p = Path('libzt/ext/ZeroTierOne/osdep/Binder.hpp')
@@ -55,7 +55,7 @@ if 'interfacesEnumerated = false;' not in s:
 # Phy: Unix-domain sockets are not part of Switch libnx's socket API.
 replace_once(
     'libzt/ext/ZeroTierOne/osdep/Phy.hpp',
-    r'#include <sys/un\\.h>',
+    r'#include <sys/un\.h>',
     '#ifndef __SWITCH__\n#include <sys/un.h>\n#endif',
 )
 
@@ -69,8 +69,6 @@ s = s.replace(
     'if(NOT SWITCH)\n    set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")\nendif()',
     1,
 )
-# libzt's upstream CMake always compiles Metrics.cpp. Keep metrics enabled, but make
-# the vendored Prometheus headers self-contained on devkitA64.
 p.write_text(s)
 
 # lwIP's generic arch.h defines ssize_t as int when SSIZE_MAX is absent. devkitA64
@@ -95,7 +93,6 @@ for rel in (
     hp = Path(rel)
     hs = hp.read_text()
     if '#include <stdexcept>' not in hs:
-        # Put it after the pragma once when present, otherwise at the top.
         if hs.startswith('#pragma once\n'):
             hs = '#pragma once\n#include <stdexcept>\n' + hs[len('#pragma once\n'):]
         else:
