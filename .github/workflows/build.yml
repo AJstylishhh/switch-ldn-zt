@@ -51,12 +51,14 @@ jobs:
           #include <netinet/in.h>
           EOF
 
-      - name: Patch Binder for Switch
+      - name: Patch Switch platform differences
         working-directory: libzt
         run: |
           set -eu
           python3 - <<'PY'
           from pathlib import Path
+
+          # Binder: Switch has no portable getifaddrs() enumeration in this context.
           p = Path("ext/ZeroTierOne/osdep/Binder.hpp")
           s = p.read_text()
           s = s.replace(
@@ -70,6 +72,29 @@ jobs:
               1,
           )
           p.write_text(s)
+
+          # Phy: Unix-domain sockets are not part of the Switch target.
+          p = Path("ext/ZeroTierOne/osdep/Phy.hpp")
+          s = p.read_text()
+          s = s.replace("#include <sys/un.h>\n", "#ifndef __SWITCH__\n#include <sys/un.h>\n#endif\n", 1)
+          p.write_text(s)
+
+          # Utils: the Switch C library exposes strtok(), but not POSIX strtok_r().
+          # Keep the existing reentrant implementation for desktop platforms.
+          p = Path("ext/ZeroTierOne/node/Utils.hpp")
+          s = p.read_text()
+          old = """#else
+\t\treturn strtok_r(str,delim,saveptr);
+#endif"""
+          new = """#elif defined(__SWITCH__)
+\t\treturn strtok(str,delim);
+#else
+\t\treturn strtok_r(str,delim,saveptr);
+#endif"""
+          if old not in s:
+              raise SystemExit("Utils.hpp stok implementation has changed upstream; refusing a blind patch")
+          s = s.replace(old, new, 1)
+          p.write_text(s)
           PY
 
       - name: Patch libzt CMake for Switch
@@ -80,12 +105,26 @@ jobs:
           from pathlib import Path
           p = Path("CMakeLists.txt")
           s = p.read_text()
+
+          # PortMapper is desktop OS-dependent; Switch uses wildcard UDP binding.
           s = s.replace(" ${ZTO_SRC_DIR}/osdep/PortMapper.cpp", "", 1)
+
+          # Do not compile/link desktop NAT helpers into the Switch static library.
           old = "$<TARGET_OBJECTS:zt_pic> $<TARGET_OBJECTS:zto_pic>\n        $<TARGET_OBJECTS:natpmp_pic> $<TARGET_OBJECTS:miniupnpc_pic>\n        $<TARGET_OBJECTS:lwip_pic> ${libztSrcGlob})"
           new = "$<TARGET_OBJECTS:zt_pic> $<TARGET_OBJECTS:zto_pic>\n        $<TARGET_OBJECTS:lwip_pic> ${libztSrcGlob})"
           if old not in s:
               raise SystemExit("Switch static target block not found")
           s = s.replace(old, new, 1)
+
+          # Do not advertise MiniUPnP to the core on Switch.
+          old = 'set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")'
+          new = '''if(NOT SWITCH)
+    set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")
+endif()'''
+          if old not in s:
+              raise SystemExit("ZT_USE_MINIUPNPC flag definition not found")
+          s = s.replace(old, new, 1)
+
           p.write_text(s)
           PY
 
