@@ -2,7 +2,7 @@ name: Build libzt for Nintendo Switch
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -16,6 +16,7 @@ jobs:
 
       - name: Verify devkitA64
         run: |
+          set -eu
           export DEVKITA64=/opt/devkitpro/devkitA64
           export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
           test -x "$DEVKITA64/bin/aarch64-none-elf-gcc"
@@ -26,6 +27,7 @@ jobs:
 
       - name: Clone upstream libzt
         run: |
+          set -eu
           git clone --depth 1 --recurse-submodules https://github.com/zerotier/libzt.git
           cd libzt
           echo "libzt commit: $(git rev-parse HEAD)"
@@ -37,116 +39,62 @@ jobs:
         run: |
           set -eu
           mkdir -p ext/arpa
-
           cat > ext/endian.h <<'EOF'
           #pragma once
-          #ifndef __LITTLE_ENDIAN
           #define __LITTLE_ENDIAN 1234
-          #endif
-          #ifndef __BIG_ENDIAN
           #define __BIG_ENDIAN 4321
-          #endif
-          #ifndef __BYTE_ORDER
           #define __BYTE_ORDER __LITTLE_ENDIAN
-          #endif
           EOF
-
           cat > ext/arpa/inet.h <<'EOF'
           #pragma once
           #include <sys/socket.h>
           #include <netinet/in.h>
           EOF
 
-      - name: Patch ZeroTier core for Switch interface enumeration
+      - name: Patch Binder for Switch
         working-directory: libzt
         run: |
           set -eu
           python3 - <<'PY'
           from pathlib import Path
-
           p = Path("ext/ZeroTierOne/osdep/Binder.hpp")
           s = p.read_text()
-
-          old = '''#else
-          #include <ifaddrs.h>
-          #include <sys/socket.h>
-          #include <sys/types.h>
-          #include <sys/wait.h>
-          #include <unistd.h>
-          #ifdef __LINUX__'''
-          new = '''#else
-          #ifndef __SWITCH__
-          #include <ifaddrs.h>
-          #include <sys/socket.h>
-          #include <sys/types.h>
-          #include <sys/wait.h>
-          #include <unistd.h>
-          #endif
-          #ifdef __LINUX__'''
-          if old not in s:
-              raise SystemExit("Binder.hpp include block has changed upstream; refusing a blind patch")
-          s = s.replace(old, new, 1)
-
-          old = 'bool interfacesEnumerated = true;'
-          new = '''bool interfacesEnumerated = true;
-          #ifdef __SWITCH__
-          // Switch has no portable getifaddrs()/interface-enumeration API here.
-          // Mark enumeration unavailable so Binder falls back to wildcard sockets.
-          interfacesEnumerated = false;
-          #endif'''
-          if old not in s:
-              raise SystemExit("Binder.hpp interfacesEnumerated declaration not found")
-          s = s.replace(old, new, 1)
-
-          old = '#if ! defined(__ANDROID__)\t  // getifaddrs() freeifaddrs() not available on Android'
-          new = '#if ! defined(__ANDROID__) && ! defined(__SWITCH__)\t  // getifaddrs() unavailable on Android and Switch'
-          if old not in s:
-              raise SystemExit("Binder.hpp getifaddrs guard not found")
-          s = s.replace(old, new, 1)
-
+          s = s.replace(
+              "#else\n#include <ifaddrs.h>\n#include <sys/socket.h>\n#include <sys/types.h>\n#include <sys/wait.h>\n#include <unistd.h>",
+              "#else\n#ifndef __SWITCH__\n#include <ifaddrs.h>\n#include <sys/socket.h>\n#include <sys/types.h>\n#include <sys/wait.h>\n#include <unistd.h>\n#endif",
+              1,
+          )
+          s = s.replace(
+              "bool interfacesEnumerated = true;",
+              "bool interfacesEnumerated = true;\n#ifdef __SWITCH__\ninterfacesEnumerated = false;\n#endif",
+              1,
+          )
           p.write_text(s)
           PY
 
-      - name: Patch libzt CMake for a real Switch static target
+      - name: Patch libzt CMake for Switch
         working-directory: libzt
         run: |
           set -eu
-
-          # PortMapper is a desktop OS-dependent component. Switch will use
-          # the core's normal wildcard UDP binding instead.
-          sed -i 's/[[:space:]]\${ZTO_SRC_DIR}\/osdep\/PortMapper.cpp//' CMakeLists.txt
-
-          # Do not compile or link the desktop NAT helpers into the Switch
-          # static library. They require Linux/macOS networking headers/APIs
-          # and are not needed for the embedded ZeroTier socket path.
           python3 - <<'PY'
           from pathlib import Path
           p = Path("CMakeLists.txt")
           s = p.read_text()
-
-          old = '''        $<TARGET_OBJECTS:zt_pic> $<TARGET_OBJECTS:zto_pic>
-        $<TARGET_OBJECTS:natpmp_pic> $<TARGET_OBJECTS:miniupnpc_pic>
-        $<TARGET_OBJECTS:lwip_pic> ${libztSrcGlob})'''
-          new = '''        $<TARGET_OBJECTS:zt_pic> $<TARGET_OBJECTS:zto_pic>
-        $<TARGET_OBJECTS:lwip_pic> ${libztSrcGlob})'''
+          s = s.replace(" ${ZTO_SRC_DIR}/osdep/PortMapper.cpp", "", 1)
+          old = "$<TARGET_OBJECTS:zt_pic> $<TARGET_OBJECTS:zto_pic>\n        $<TARGET_OBJECTS:natpmp_pic> $<TARGET_OBJECTS:miniupnpc_pic>\n        $<TARGET_OBJECTS:lwip_pic> ${libztSrcGlob})"
+          new = "$<TARGET_OBJECTS:zt_pic> $<TARGET_OBJECTS:zto_pic>\n        $<TARGET_OBJECTS:lwip_pic> ${libztSrcGlob})"
           if old not in s:
-              raise SystemExit("Static library source list has changed upstream; refusing a blind patch")
+              raise SystemExit("Switch static target block not found")
           s = s.replace(old, new, 1)
-
           p.write_text(s)
           PY
 
-          grep -n -A8 -B2 'add_library(.*STATIC' CMakeLists.txt | tail -30
-          ! grep -q 'TARGET_OBJECTS:natpmp_pic' CMakeLists.txt
-          ! grep -q 'TARGET_OBJECTS:miniupnpc_pic' CMakeLists.txt
-
-      - name: Configure libzt static library for Switch
+      - name: Configure libzt
         working-directory: libzt
         run: |
           set -eu
           export DEVKITA64=/opt/devkitpro/devkitA64
           export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
-
           cmake -S . -B build-switch \
             -DCMAKE_TOOLCHAIN_FILE=/__w/switch-ldn-zt/switch-ldn-zt/cmake/switch.toolchain.cmake \
             -DCMAKE_BUILD_TYPE=Release \
@@ -158,15 +106,14 @@ jobs:
             -DZTS_DISABLE_CENTRAL_API=ON \
             -DSTACK_PROTECTOR=OFF \
             -DSWITCH=ON \
-            -DLWIP_PORT_DIR=/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port \
             -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext" \
             -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext"
 
-      - name: Confirm Switch flags reached the compiler configuration
+      - name: Verify Switch flags
         working-directory: libzt
         run: |
           set -eu
-          grep -R -- '-D__SWITCH__' build-switch/CMakeFiles | head -20 || true
+          grep -R -- "-D__SWITCH__" build-switch/CMakeFiles | head -20
 
       - name: Build libzt static library
         working-directory: libzt
@@ -174,17 +121,16 @@ jobs:
           set -eu
           cmake --build build-switch --target zt-static --parallel 2 --verbose
 
-      - name: Verify Switch library artifact
+      - name: Verify artifact
         working-directory: libzt
         run: |
           set -eu
           LIB="$(find build-switch -type f -name 'libzt.a' | head -1)"
           test -n "$LIB"
           test -s "$LIB"
-          echo "Switch library: $LIB"
           aarch64-none-elf-ar t "$LIB" | head -60
 
-      - name: Package libzt for later ldn_mitm integration
+      - name: Package Switch libzt
         run: |
           set -eu
           mkdir -p dist/libzt-switch/include dist/libzt-switch/lib
