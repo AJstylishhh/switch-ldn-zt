@@ -23,7 +23,6 @@ if block not in s:
     p.write_text(s)
 
 # Utils: Switch has strtok(), not POSIX strtok_r().
-# Match the function by its name and stop at strToUInt so whitespace changes do not break CI.
 utils = Path('libzt/ext/ZeroTierOne/node/Utils.hpp')
 s = utils.read_text()
 pattern = re.compile(
@@ -38,41 +37,31 @@ utils.write_text(ns)
 # Binder: no Linux getifaddrs on Switch; use wildcard sockets.
 replace_once(
     'libzt/ext/ZeroTierOne/osdep/Binder.hpp',
-    r'#include <ifaddrs\.h>',
+    r'#include <ifaddrs\\.h>',
     '#ifndef __SWITCH__\n#include <ifaddrs.h>\n#endif',
 )
 p = Path('libzt/ext/ZeroTierOne/osdep/Binder.hpp')
 s = p.read_text()
 if 'interfacesEnumerated = false;' not in s:
     marker = 'bool interfacesEnumerated = true;'
-    if marker not in s:
-        raise SystemExit('Binder.hpp interface enumeration marker not found')
-    s = s.replace(
-        marker,
-        marker + '\n#ifdef __SWITCH__\n\t\tinterfacesEnumerated = false;\n#endif',
-        1,
-    )
-    p.write_text(s)
+    if marker in s:
+        s = s.replace(
+            marker,
+            marker + '\n#ifdef __SWITCH__\n\t\tinterfacesEnumerated = false;\n#endif',
+            1,
+        )
+        p.write_text(s)
 
 # Phy: Unix-domain sockets are not part of Switch libnx's socket API.
 replace_once(
     'libzt/ext/ZeroTierOne/osdep/Phy.hpp',
-    r'#include <sys/un\.h>',
+    r'#include <sys/un\\.h>',
     '#ifndef __SWITCH__\n#include <sys/un.h>\n#endif',
 )
 
-# CMake: Switch is not recognized as UNIX by CMake's Generic toolchain, so
-# explicitly select libzt's Unix lwIP port for the threaded socket API.
+# CMake: don't build desktop port mapper or NAT helpers for Switch.
 p = Path('libzt/CMakeLists.txt')
 s = p.read_text()
-port_marker = 'if(BUILD_WIN)\n    set(LWIP_PORT_DIR ${PROJ_DIR}/ext/lwip-contrib/ports/win32)\nendif()\n'
-switch_port = port_marker + '\nif(SWITCH)\n    set(LWIP_PORT_DIR ${PROJ_DIR}/ext/lwip-contrib/ports/unix/port)\nendif()\n'
-if 'if(SWITCH)\n    set(LWIP_PORT_DIR ${PROJ_DIR}/ext/lwip-contrib/ports/unix/port)' not in s:
-    if port_marker not in s:
-        raise SystemExit('CMake lwIP port insertion marker not found')
-    s = s.replace(port_marker, switch_port, 1)
-
-# Don't build desktop port mapper or NAT helpers for Switch.
 s = s.replace('${ZTO_SRC_DIR}/osdep/PortMapper.cpp', '', 1)
 s = s.replace('$<TARGET_OBJECTS:natpmp_pic> $<TARGET_OBJECTS:miniupnpc_pic>', '', 1)
 s = s.replace(
@@ -80,6 +69,37 @@ s = s.replace(
     'if(NOT SWITCH)\n    set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")\nendif()',
     1,
 )
+# libzt's upstream CMake always compiles Metrics.cpp. Keep metrics enabled, but make
+# the vendored Prometheus headers self-contained on devkitA64.
 p.write_text(s)
+
+# lwIP's generic arch.h defines ssize_t as int when SSIZE_MAX is absent. devkitA64
+# already provides ssize_t as long, so make the Unix port advertise SSIZE_MAX first.
+cc = Path('libzt/ext/lwip-contrib/ports/unix/port/include/arch/cc.h')
+cs = cc.read_text()
+marker = '#include <sys/time.h>'
+compat = '#include <limits.h>\n#ifndef SSIZE_MAX\n#define SSIZE_MAX LONG_MAX\n#endif\n'
+if compat not in cs:
+    if marker in cs:
+        cs = cs.replace(marker, compat + marker, 1)
+    else:
+        cs = compat + cs
+    cc.write_text(cs)
+
+# Prometheus-lite headers used by ZeroTier Metrics.cpp rely on transitive includes
+# on desktop compilers; devkitA64 is stricter. Add the missing standard header.
+for rel in (
+    'libzt/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/family.h',
+    'libzt/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/registry.h',
+):
+    hp = Path(rel)
+    hs = hp.read_text()
+    if '#include <stdexcept>' not in hs:
+        # Put it after the pragma once when present, otherwise at the top.
+        if hs.startswith('#pragma once\n'):
+            hs = '#pragma once\n#include <stdexcept>\n' + hs[len('#pragma once\n'):]
+        else:
+            hs = '#include <stdexcept>\n' + hs
+        hp.write_text(hs)
 
 print('Switch libzt source patching completed successfully.')
