@@ -101,6 +101,8 @@ jobs:
         working-directory: libzt
         run: |
           set -eu
+          export DEVKITA64=/opt/devkitpro/devkitA64
+          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
           LIB="$(find build-switch -type f -name 'libzt.a' | head -1)"
           test -n "$LIB"
           test -s "$LIB"
