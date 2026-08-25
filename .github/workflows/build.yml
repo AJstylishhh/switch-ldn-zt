@@ -122,3 +122,31 @@ jobs:
           name: libzt-switch
           path: libzt-switch.tar.gz
           retention-days: 14
+
+      - name: Prepare Switch homebrew dependency
+        run: |
+          set -eu
+          rm -rf /tmp/libzt-switch third_party/libzt
+          mkdir -p /tmp/libzt-switch third_party
+          tar -xzf libzt-switch.tar.gz -C /tmp/libzt-switch
+          mv /tmp/libzt-switch/libzt-switch third_party/libzt
+          test -f third_party/libzt/include/ZeroTierSockets.h
+          test -s third_party/libzt/lib/libzt.a
+
+      - name: Build ZeroTier Switch NRO
+        run: |
+          set -eu
+          make clean
+          make
+          test -s zerotier-switch.nro
+          file zerotier-switch.nro
+          ls -lh zerotier-switch.nro
+
+      - name: Upload ZeroTier Switch NRO
+        uses: actions/upload-artifact@v4
+        with:
+          name: zerotier-switch-nro
+          path: |
+            zerotier-switch.nro
+            zerotier-switch.nacp
+          retention-days: 14
