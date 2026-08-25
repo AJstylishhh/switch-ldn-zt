@@ -50,22 +50,22 @@ if '#ifndef __SWITCH__\n#include <ifaddrs.h>\n#endif' not in bs:
         raise SystemExit('Binder.hpp ifaddrs include not found')
     bs = bs2
 
-# Wrap the complete getifaddrs fallback block. Use tolerant boundaries because
-# upstream Binder.hpp formatting varies by release.
-if '#ifdef __SWITCH__\n\t\t\tinterfacesEnumerated = false;\n#else\n' not in bs:
-    start_re = re.compile(r'(?m)^\s*#if\s*!\s*defined\(__ANDROID__\).*getifaddrs\(.*$')
-    start_match = start_re.search(bs)
-    end_matches = list(re.finditer(r'(?m)^\s*#endif\s*//\s*ZT_EXTOSDEP\s*$', bs))
-    if not start_match or not end_matches:
-        raise SystemExit('Binder.hpp getifaddrs block could not be located safely')
-    end_match = end_matches[-1]
-    if end_match.start() <= start_match.start():
-        raise SystemExit('Binder.hpp getifaddrs block boundaries are invalid')
-    block_text = bs[start_match.start():end_match.start()]
-    wrapped = '#ifdef __SWITCH__\n\t\t\tinterfacesEnumerated = false;\n#else\n' + block_text + '\n#endif\n'
-    bs = bs[:start_match.start()] + wrapped + bs[end_match.start():]
+# On Switch, skip the entire generic getifaddrs() fallback with a single
+# preprocessor-condition edit. This avoids depending on fragile multiline markers.
+start = '#if ! defined(__ANDROID__)\t // getifaddrs() freeifaddrs() not available on Android'
+replacement_start = '#if ! defined(__ANDROID__) && ! defined(__SWITCH__)\t // getifaddrs() unavailable on Switch'
+if start in bs:
+    bs = bs.replace(start, replacement_start, 1)
+else:
+    # Tolerate whitespace differences in the upstream source.
+    pattern = re.compile(r'^\s*#if\s*!\s*defined\(__ANDROID__\).*getifaddrs\(\).*$', re.MULTILINE)
+    bs2, count = pattern.subn(replacement_start, bs, count=1)
+    if count != 1:
+        raise SystemExit('Binder.hpp getifaddrs guard line not found')
+    bs = bs2
 
-# The wildcard fallback should be selected when interface enumeration is skipped.
+# Because Switch skips the block above, force the existing wildcard-address
+# fallback path to be selected.
 if 'interfacesEnumerated = false;' not in bs:
     marker = 'bool interfacesEnumerated = true;'
     if marker not in bs:
