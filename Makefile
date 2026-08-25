@@ -29,18 +29,21 @@ export TOPDIR := $(CURDIR)
 export VPATH := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
 export DEPSDIR := $(CURDIR)/$(BUILD)
 
-CPPFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
+# The recursive make runs from $(BUILD), so the wildcard must be rooted at
+# TOPDIR. Otherwise source/main.cpp is not discovered and the linker reports
+# "required symbol main not defined".
+CPPFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(TOPDIR)/$(dir)/*.cpp)))
 OFILES_SRC := $(CPPFILES:.cpp=.o)
 OFILES := $(OFILES_SRC)
 
-export INCLUDE := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
+export INCLUDE := $(foreach dir,$(INCLUDES),-I$(TOPDIR)/$(dir)) \
                   $(foreach dir,$(LIBDIRS),-I$(dir)/include) \
                   -I$(CURDIR)/$(BUILD)
 export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
 export LD := $(CXX)
 
-export NROFLAGS += --nacp=$(CURDIR)/$(TARGET).nacp
+export NROFLAGS += --nacp=$(TOPDIR)/$(TARGET).nacp
 export APP_TITLE := ZeroTier Switch
 export APP_AUTHOR := switch-ldn-zt
 export APP_VERSION := 0.1.0
@@ -52,7 +55,7 @@ all: $(BUILD)
 
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
-	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(TOPDIR)/Makefile
 
 clean:
 	@echo clean ...
