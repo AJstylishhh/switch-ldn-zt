@@ -43,6 +43,27 @@ jobs:
           set -eu
           python3 scripts/patch-libzt-switch.py
 
+      - name: Patch remaining Switch portability gaps
+        working-directory: libzt
+        run: |
+          set -eu
+
+          # ZeroTierOne/osdep/OSUtils.cpp uses a desktop Unix header that the
+          # devkitA64 environment does not provide. Keep it enabled everywhere else.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('ext/ZeroTierOne/osdep/OSUtils.cpp')
+          s = p.read_text()
+          needle = '#include <sys/uio.h>'
+          wrapped = '#ifndef __SWITCH__\n#include <sys/uio.h>\n#endif'
+          if wrapped not in s:
+              if s.count(needle) != 1:
+                  raise SystemExit(f'Expected exactly one sys/uio.h include in {p}, found {s.count(needle)}')
+              s = s.replace(needle, wrapped, 1)
+              p.write_text(s)
+          print('OSUtils.cpp sys/uio.h guard: OK')
+          PY
+
       - name: Configure libzt
         working-directory: libzt
         run: |
@@ -59,15 +80,17 @@ jobs:
             -DALLOW_INSTALL_TARGET=OFF \
             -DZTS_DISABLE_CENTRAL_API=ON \
             -DSWITCH=ON \
-            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext" \
-            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext"
+            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=128 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext" \
+            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=128 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext"
 
       - name: Verify Switch flags and lwIP port
         working-directory: libzt
         run: |
           set -eu
           grep -R -- "-D__SWITCH__" build-switch/CMakeFiles | head -20
+          grep -R -- "-DFD_SETSIZE=128" build-switch/CMakeFiles | head -5
           test -f ext/lwip-contrib/ports/unix/port/include/arch/cc.h
+          test -f ext/lwip/src/include/arch/cc.h
           grep -R -- "lwip-contrib/ports/unix/port" build-switch/CMakeFiles | head -20
 
       - name: Build libzt static library
