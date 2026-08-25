@@ -107,26 +107,38 @@ jobs:
           p.write_text(s)
           PY
 
-      - name: Patch libzt CMake for Switch
+      - name: Patch libzt CMake for a real Switch static target
         working-directory: libzt
         run: |
           set -eu
 
-          # libzt's current CMake always adds PortMapper.cpp to the ZeroTier core.
-          # That is a desktop NAT/interface-management component; libzt on Switch
-          # should use the core's wildcard UDP binding instead.
+          # PortMapper is a desktop OS-dependent component. Switch will use
+          # the core's normal wildcard UDP binding instead.
           sed -i 's/[[:space:]]\${ZTO_SRC_DIR}\/osdep\/PortMapper.cpp//' CMakeLists.txt
 
-          # MiniUPnP is only useful to the desktop PortMapper path.
-          sed -i 's|set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")|if(NOT SWITCH)\n    set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")\nendif()|' CMakeLists.txt
+          # Do not compile or link the desktop NAT helpers into the Switch
+          # static library. They require Linux/macOS networking headers/APIs
+          # and are not needed for the embedded ZeroTier socket path.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("CMakeLists.txt")
+          s = p.read_text()
 
-          if grep -q 'osdep/PortMapper.cpp' CMakeLists.txt; then
-            echo "PortMapper.cpp is still present in ztcore sources"
-            exit 1
-          fi
+          old = '''        $<TARGET_OBJECTS:zt_pic> $<TARGET_OBJECTS:zto_pic>
+        $<TARGET_OBJECTS:natpmp_pic> $<TARGET_OBJECTS:miniupnpc_pic>
+        $<TARGET_OBJECTS:lwip_pic> ${libztSrcGlob})'''
+          new = '''        $<TARGET_OBJECTS:zt_pic> $<TARGET_OBJECTS:zto_pic>
+        $<TARGET_OBJECTS:lwip_pic> ${libztSrcGlob})'''
+          if old not in s:
+              raise SystemExit("Static library source list has changed upstream; refusing a blind patch")
+          s = s.replace(old, new, 1)
 
-          grep -n -A4 -B2 'ZT_USE_MINIUPNPC' CMakeLists.txt
-          grep -n 'PortMapper.cpp' CMakeLists.txt || true
+          p.write_text(s)
+          PY
+
+          grep -n -A8 -B2 'add_library(.*STATIC' CMakeLists.txt | tail -30
+          ! grep -q 'TARGET_OBJECTS:natpmp_pic' CMakeLists.txt
+          ! grep -q 'TARGET_OBJECTS:miniupnpc_pic' CMakeLists.txt
 
       - name: Configure libzt static library for Switch
         working-directory: libzt
@@ -147,8 +159,14 @@ jobs:
             -DSTACK_PROTECTOR=OFF \
             -DSWITCH=ON \
             -DLWIP_PORT_DIR=/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port \
-            -DCMAKE_C_FLAGS="-I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext" \
-            -DCMAKE_CXX_FLAGS="-I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext"
+            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext" \
+            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext"
+
+      - name: Confirm Switch flags reached the compiler configuration
+        working-directory: libzt
+        run: |
+          set -eu
+          grep -R -- '-D__SWITCH__' build-switch/CMakeFiles | head -20 || true
 
       - name: Build libzt static library
         working-directory: libzt
