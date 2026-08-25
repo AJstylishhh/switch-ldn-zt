@@ -34,58 +34,88 @@ if count != 1:
     raise SystemExit('Utils.hpp stok function not found')
 utils.write_text(ns)
 
-# Binder: no Linux getifaddrs on Switch; use wildcard sockets.
-replace_once(
-    'libzt/ext/ZeroTierOne/osdep/Binder.hpp',
-    r'#include <ifaddrs\.h>',
-    '#ifndef __SWITCH__\n#include <ifaddrs.h>\n#endif',
-)
-p = Path('libzt/ext/ZeroTierOne/osdep/Binder.hpp')
-s = p.read_text()
-if 'interfacesEnumerated = false;' not in s:
+# Binder: Switch cannot enumerate host interfaces with Linux getifaddrs().
+# Do not merely hide the include: hide the entire fallback enumeration block.
+binder = Path('libzt/ext/ZeroTierOne/osdep/Binder.hpp')
+bs = binder.read_text()
+if '#ifndef __SWITCH__\n#if ! defined(__ANDROID__)' not in bs:
+    start = '#if ! defined(__ANDROID__)\t // getifaddrs() freeifaddrs() not available on Android'
+    marker = '#endif\t // ZT_EXTOSDEP'
+    start_i = bs.find(start)
+    marker_i = bs.find(marker, start_i if start_i >= 0 else 0)
+    if start_i < 0 or marker_i < 0:
+        raise SystemExit('Binder.hpp getifaddrs block markers not found')
+    bs = bs[:start_i] + '#ifndef __SWITCH__\n' + bs[start_i:marker_i] + '#endif\n\n' + bs[marker_i:]
+
+# Keep the header available for non-Switch builds; Switch skips the block above.
+if '#ifndef __SWITCH__\n#include <ifaddrs.h>\n#endif' not in bs:
+    bs2, count = re.subn(
+        r'#include <ifaddrs\.h>',
+        '#ifndef __SWITCH__\n#include <ifaddrs.h>\n#endif',
+        bs,
+        count=1,
+    )
+    if count != 1:
+        raise SystemExit('Binder.hpp ifaddrs include not found')
+    bs = bs2
+
+# Ensure the wildcard fallback is selected on Switch.
+if 'interfacesEnumerated = false;' not in bs:
     marker = 'bool interfacesEnumerated = true;'
-    if marker in s:
-        s = s.replace(
+    if marker in bs:
+        bs = bs.replace(
             marker,
             marker + '\n#ifdef __SWITCH__\n\t\tinterfacesEnumerated = false;\n#endif',
             1,
         )
-        p.write_text(s)
+    else:
+        raise SystemExit('Binder.hpp interface enumeration marker not found')
 
-# Phy: Unix-domain sockets are not part of Switch libnx's socket API.
-replace_once(
-    'libzt/ext/ZeroTierOne/osdep/Phy.hpp',
+binder.write_text(bs)
+
+# Phy: the Switch runtime does not provide Unix-domain sockets. Keep the upstream
+# Unix socket implementation available for normal UNIX builds, but make the
+# sockaddr_un cleanup and Unix-socket helper code compile safely on Switch by
+# providing a small compatibility definition and avoiding the missing system header.
+phy = Path('libzt/ext/ZeroTierOne/osdep/Phy.hpp')
+ps = phy.read_text()
+ps2, count = re.subn(
     r'#include <sys/un\.h>',
     '#ifndef __SWITCH__\n#include <sys/un.h>\n#endif',
+    ps,
+    count=1,
 )
+if count != 1:
+    raise SystemExit('Phy.hpp sys/un.h include not found')
+phy.write_text(ps2)
 
-# CMake: don't build desktop port mapper or NAT helpers for Switch.
-p = Path('libzt/CMakeLists.txt')
-s = p.read_text()
-s = s.replace('${ZTO_SRC_DIR}/osdep/PortMapper.cpp', '', 1)
-s = s.replace('$<TARGET_OBJECTS:natpmp_pic> $<TARGET_OBJECTS:miniupnpc_pic>', '', 1)
-s = s.replace(
+# CMake: do not link desktop port mapper or NAT helper objects for Switch.
+cm = Path('libzt/CMakeLists.txt')
+cs = cm.read_text()
+cs = cs.replace('${ZTO_SRC_DIR}/osdep/PortMapper.cpp', '', 1)
+cs = cs.replace('$<TARGET_OBJECTS:natpmp_pic> $<TARGET_OBJECTS:miniupnpc_pic>', '', 1)
+cs = cs.replace(
     'set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")',
     'if(NOT SWITCH)\n    set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")\nendif()',
     1,
 )
-p.write_text(s)
+cm.write_text(cs)
 
 # lwIP's generic arch.h defines ssize_t as int when SSIZE_MAX is absent. devkitA64
-# already provides ssize_t as long, so make the Unix port advertise SSIZE_MAX first.
+# already provides ssize_t as long, so advertise SSIZE_MAX first.
 cc = Path('libzt/ext/lwip-contrib/ports/unix/port/include/arch/cc.h')
-cs = cc.read_text()
-marker = '#include <sys/time.h>'
+ccs = cc.read_text()
 compat = '#include <limits.h>\n#ifndef SSIZE_MAX\n#define SSIZE_MAX LONG_MAX\n#endif\n'
-if compat not in cs:
-    if marker in cs:
-        cs = cs.replace(marker, compat + marker, 1)
+if compat not in ccs:
+    marker = '#include <sys/time.h>'
+    if marker in ccs:
+        ccs = ccs.replace(marker, compat + marker, 1)
     else:
-        cs = compat + cs
-    cc.write_text(cs)
+        ccs = compat + ccs
+    cc.write_text(ccs)
 
 # Prometheus-lite headers used by ZeroTier Metrics.cpp rely on transitive includes
-# on desktop compilers; devkitA64 is stricter. Add the missing standard header.
+# on desktop compilers; devkitA64 is stricter.
 for rel in (
     'libzt/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/family.h',
     'libzt/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/registry.h',
@@ -98,5 +128,23 @@ for rel in (
         else:
             hs = '#include <stdexcept>\n' + hs
         hp.write_text(hs)
+
+# Switch does not ship Unix-domain-socket headers. Supply only the struct needed by
+# the generic Phy implementation so the source can compile; the Unix-domain path is
+# not used by the Switch integration.
+sys_un = Path('libzt/ext/sys/un.h')
+sys_un.parent.mkdir(parents=True, exist_ok=True)
+sys_un.write_text(
+    '#pragma once\n'
+    '#include <sys/types.h>\n'
+    '#include <sys/socket.h>\n'
+    '#ifndef AF_UNIX\n'
+    '#define AF_UNIX 1\n'
+    '#endif\n'
+    'struct sockaddr_un {\n'
+    '    sa_family_t sun_family;\n'
+    '    char sun_path[108];\n'
+    '};\n'
+)
 
 print('Switch libzt source patching completed successfully.')
