@@ -1,56 +1,150 @@
-name: Build attempt
-
-# Same pattern as your NRO CI pipelines — trigger from phone via a normal push/PR,
-# GitHub's runner does the actual compiling so you never need a PC/laptop for this either.
+name: Build libzt for Nintendo Switch
 
 on:
   push:
     branches: [ main ]
-  pull_request:
   workflow_dispatch:
 
 jobs:
-  build-libzt-core:
+  build-libzt-switch:
     runs-on: ubuntu-latest
     container: devkitpro/devkita64:latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Clone libzt
-        run: git clone --recurse-submodules https://github.com/zerotier/libzt.git
-
-      - name: Patch libzt for Switch target quirks
+      - name: Verify devkitA64
         run: |
-          sed -i 's|#include <endian.h>|// patched for Switch|g' libzt/ext/ZeroTierOne/node/Constants.hpp
-          # getifaddrs()/freeifaddrs() don't exist on the Switch (no /proc, no full POSIX net
-          # interface enumeration) — same situation as Android, which ZeroTier already excludes
-          # via this same guard. We just add __SWITCH__ to that existing exclusion.
-          sed -i 's|#if ! defined(__ANDROID__)\t  // getifaddrs() freeifaddrs() not available on Android|#if ! defined(__ANDROID__) \&\& ! defined(__SWITCH__)  // getifaddrs()/freeifaddrs() not available on Android or Switch|' libzt/ext/ZeroTierOne/osdep/Binder.hpp
+          export DEVKITA64=/opt/devkitpro/devkitA64
+          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
+          test -x "$DEVKITA64/bin/aarch64-none-elf-gcc"
+          test -x "$DEVKITA64/bin/aarch64-none-elf-g++"
+          aarch64-none-elf-gcc --version
+          aarch64-none-elf-g++ --version
+          aarch64-none-elf-gcc -dumpmachine
 
-      - name: Configure libztcore (zto_obj) with devkitA64 toolchain
-        # First real attempt: just the ZeroTier core protocol/crypto object library,
-        # which doesn't need the lwIP socket layer yet. Expected to surface real
-        # missing-header/symbol errors — that's useful signal, not a failure of the pipeline.
+      - name: Clone upstream libzt
+        run: |
+          git clone --depth 1 --recurse-submodules https://github.com/zerotier/libzt.git
+
+      - name: Prepare Switch compatibility layer
         working-directory: libzt
         run: |
-          mkdir -p build-switch
-          cd build-switch
-          cmake -DCMAKE_TOOLCHAIN_FILE=/__w/switch-ldn-zt/switch-ldn-zt/cmake/switch.toolchain.cmake \
-                -DBUILD_STATIC_LIB=ON \
-                -DBUILD_SHARED_LIB=OFF \
-                -DBUILD_HOST_SELFTEST=OFF \
-                -DALLOW_INSTALL_TARGET=OFF \
-                -DZTS_DISABLE_CENTRAL_API=ON \
-                ..
-        continue-on-error: true
+          mkdir -p ext/arpa
 
-      - name: Attempt to build just the zto_obj target
-        working-directory: libzt/build-switch
-        run: cmake --build . --target zto_obj --verbose
-        continue-on-error: true
+          cat > ext/endian.h <<'EOF'
+          #pragma once
+          #ifndef __LITTLE_ENDIAN
+          #define __LITTLE_ENDIAN 1234
+          #endif
+          #ifndef __BIG_ENDIAN
+          #define __BIG_ENDIAN 4321
+          #endif
+          #ifndef __BYTE_ORDER
+          #define __BYTE_ORDER __LITTLE_ENDIAN
+          #endif
+          EOF
 
-      - name: Build ldn_mitm base (sanity check toolchain works at all)
+          cat > ext/arpa/inet.h <<'EOF'
+          #pragma once
+          #include <sys/socket.h>
+          #include <netinet/in.h>
+          EOF
+
+      - name: Patch libzt CMake for Switch
+        working-directory: libzt
         run: |
-          git clone https://github.com/spacemeowx2/ldn_mitm.git
-          echo "TODO: needs libstratosphere submodule + Atmosphere headers to actually build — placeholder for now"
-        continue-on-error: true
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('CMakeLists.txt')
+          s = p.read_text()
+
+          old = '''set(LWIP_SRC_DIR "${PROJ_DIR}/ext/lwip/src")
+          set(ZTO_SRC_DIR "${PROJ_DIR}/ext/ZeroTierOne")
+          set(LIBZT_SRC_DIR "${PROJ_DIR}/src")'''
+          new = '''set(LWIP_SRC_DIR "${PROJ_DIR}/ext/lwip/src")
+          set(ZTO_SRC_DIR "${PROJ_DIR}/ext/ZeroTierOne")
+          set(LIBZT_SRC_DIR "${PROJ_DIR}/src")
+
+          if(DEFINED SWITCH)
+              set(LWIP_PORT_DIR "${PROJ_DIR}/ext/lwip-contrib/ports/unix/port" CACHE PATH "lwIP port used for Switch")
+          endif()'''
+          if old not in s:
+              raise SystemExit('Could not find source-directory block in libzt CMakeLists.txt')
+          s = s.replace(old, new, 1)
+
+          old = '''file(GLOB ztcoreSrcGlob ${ZTO_SRC_DIR}/node/*.cpp
+          ${ZTO_SRC_DIR}/osdep/OSUtils.cpp ${ZTO_SRC_DIR}/osdep/PortMapper.cpp)'''
+          new = '''file(GLOB ztcoreSrcGlob ${ZTO_SRC_DIR}/node/*.cpp
+          ${ZTO_SRC_DIR}/osdep/OSUtils.cpp)
+          if(NOT DEFINED SWITCH)
+              list(APPEND ztcoreSrcGlob ${ZTO_SRC_DIR}/osdep/PortMapper.cpp)
+          endif()'''
+          if old not in s:
+              raise SystemExit('Could not find ztcore source block in libzt CMakeLists.txt')
+          s = s.replace(old, new, 1)
+
+          # MiniUPnP/PortMapper are desktop conveniences. Keep the core path lean on Switch.
+          old = '''file(
+              GLOB
+              libminiupnpcSrcGlob'''
+          if old not in s:
+              raise SystemExit('Could not find miniupnpc source block in libzt CMakeLists.txt')
+          marker = '''file(
+              GLOB
+              libminiupnpcSrcGlob'''
+          s = s.replace(marker, '''file(
+              GLOB
+              libminiupnpcSrcGlob''', 1)
+
+          p.write_text(s)
+          PY
+
+      - name: Configure libzt static library for Switch
+        working-directory: libzt
+        run: |
+          export DEVKITA64=/opt/devkitpro/devkitA64
+          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
+
+          cmake -S . -B build-switch \
+            -DCMAKE_TOOLCHAIN_FILE=/__w/switch-ldn-zt/switch-ldn-zt/cmake/switch.toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_STATIC_LIB=ON \
+            -DBUILD_SHARED_LIB=OFF \
+            -DBUILD_HOST_EXAMPLES=OFF \
+            -DBUILD_HOST_SELFTEST=OFF \
+            -DALLOW_INSTALL_TARGET=OFF \
+            -DZTS_DISABLE_CENTRAL_API=ON \
+            -DSTACK_PROTECTOR=OFF \
+            -DSWITCH=ON \
+            -DCMAKE_C_FLAGS="-I${PWD}/ext" \
+            -DCMAKE_CXX_FLAGS="-I${PWD}/ext"
+
+      - name: Build libzt static library
+        working-directory: libzt
+        run: |
+          cmake --build build-switch --target zt-static --parallel 2 --verbose
+
+      - name: Verify Switch library artifact
+        working-directory: libzt
+        run: |
+          set -e
+          find build-switch -type f -name 'libzt*.a' -print
+          find build-switch -type f -name 'libzt*.a' -exec aarch64-none-elf-ar t {} \; | head -40
+
+      - name: Package libzt for later ldn_mitm integration
+        run: |
+          set -e
+          mkdir -p dist/libzt-switch/include dist/libzt-switch/lib
+          cp libzt/include/ZeroTierSockets.h dist/libzt-switch/include/
+          cp "$(find libzt/build-switch -type f -name 'libzt.a' | head -1)" dist/libzt-switch/lib/
+          tar -C dist -czf libzt-switch.tar.gz libzt-switch
+
+      - name: Upload Switch libzt artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libzt-switch
+          path: libzt-switch.tar.gz
+          retention-days: 14
