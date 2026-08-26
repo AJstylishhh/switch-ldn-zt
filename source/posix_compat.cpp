@@ -1,6 +1,7 @@
 #include <switch.h>
 
 #include <sys/socket.h>
+#include <errno.h>
 
 // ZeroTier's lwIP/Unix compatibility layer expects a POSIX errno object.
 // libnx/newlib normally exposes errno through __errno(), while the lwIP Unix
