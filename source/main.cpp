@@ -7,6 +7,8 @@
 #include <cinttypes>
 #include <sys/stat.h>
 
+// No direct HID API is used by this transport test application.
+// It exits through the normal libnx applet lifecycle for compatibility.
 static uint64_t g_network_id = 0;
 static bool g_joined = false;
 
