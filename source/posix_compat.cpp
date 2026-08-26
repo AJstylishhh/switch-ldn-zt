@@ -19,7 +19,10 @@ extern "C" int errno = 0;
 extern "C" int pipe(int fds[2])
 {
     if (!fds) {
-        errno = EINVAL;
+        // EINVAL is POSIX errno value 22. Some devkitA64/newlib combinations
+        // do not expose the EINVAL macro in this compatibility translation
+        // unit, so use the standardized value directly here.
+        errno = 22;
         return -1;
     }
 
