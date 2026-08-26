@@ -1,85 +1,36 @@
 from pathlib import Path
 import re
 
-# Keep the Switch app's diagnostics short enough to be practical while still
-# preserving a visible pause at every checkpoint. This runs before the
-# thread-registry patch so it is not skipped by early compatibility exits.
+# Runtime diagnostics are kept short enough to be practical on hardware.
+# main.cpp is checked out from this repository, so update it directly here.
 main_cpp = Path('source/main.cpp')
 if main_cpp.exists():
     main_text = main_cpp.read_text()
     main_text = main_text.replace('5000000000ULL', '3000000000ULL')
     main_cpp.write_text(main_text)
-    print('Switch diagnostics reduced to 3 seconds.')
+    print('Switch diagnostics: 3 seconds')
 
+# The Unix lwIP port used by libzt has this general flow:
+#   pthread_create() -> introduce_thread() -> return sys_thread_t
+# The previous diagnostic only proved pthread_create() returned 0. Instrument
+# every transition around the remaining path so the next Switch run identifies
+# the exact statement that blocks.
 
-def add_thread_runtime_diagnostics(text, path):
-    """Instrument the exact gap after pthread_create() and introduce_thread()."""
-    if '[SWITCH-DIAG] after pthread_create' in text:
-        return text
-
-    # The bootstrap already adds <switch.h> and the existing diagnostics.
-    # Add two markers around the suspected blocking operation so the next NRO
-    # tells us whether the hang is inside introduce_thread(), after it, or in
-    # some later sys_thread_new bookkeeping.
-    create_pat = re.compile(
-        r'(code\s*=\s*pthread_create\s*\(.*?\);)',
-        re.S,
-    )
-    match = create_pat.search(text)
-    if match:
-        insertion = (
-            match.group(1)
-            + '\n#ifdef __SWITCH__\n'
-            + '  printf("[SWITCH-DIAG] after pthread_create; entering st/registry path\\n");\n'
-            + '  consoleUpdate(NULL);\n'
-            + '#endif'
-        )
-        text = text[:match.start()] + insertion + text[match.end():]
-
-    # Instrument the common introduce_thread(tmp) assignment. Keep this
-    # independent of whitespace so it survives upstream lwIP formatting.
-    intro_pat = re.compile(r'(?m)^(\s*)(st\s*=\s*introduce_thread\s*\(\s*tmp\s*\)\s*;)\s*$')
-    m = intro_pat.search(text)
-    if m:
-        indent = m.group(1)
-        statement = m.group(2)
-        replacement = (
-            indent + '#ifdef __SWITCH__\n'
-            + indent + 'printf("[SWITCH-DIAG] before introduce_thread(tmp)\\n");\n'
-            + indent + 'consoleUpdate(NULL);\n'
-            + indent + '#endif\n'
-            + indent + statement + '\n'
-            + indent + '#ifdef __SWITCH__\n'
-            + indent + 'printf("[SWITCH-DIAG] after introduce_thread(tmp): %s\\n", st ? "non-null" : "NULL");\n'
-            + indent + 'consoleUpdate(NULL);\n'
-            + indent + '#endif'
-        )
-        text = text[:m.start()] + replacement + text[m.end():]
-
-    return text
-
-
-# The lwIP Unix port has changed its thread bookkeeping across versions.
-# Some versions keep a pthread registry protected by threads_mutex; newer
-# versions do not have that registry at all. The Switch build must patch the
-# registry only when it actually exists — absence of it is NOT a build error.
-
-candidates = list(Path('libzt').rglob('sys_arch.c'))
-if not candidates:
-    print('No lwIP sys_arch.c found; leaving thread registry unchanged.')
-    raise SystemExit(0)
-
-for path in candidates:
+for path in Path('libzt').rglob('sys_arch.c'):
     try:
         text = path.read_text()
     except Exception as exc:
         print(f'Could not read {path}: {exc}')
         continue
 
-    if 'sys_thread_new(' not in text or 'pthread_create' not in text:
+    if 'sys_thread_new' not in text or 'pthread_create' not in text:
         continue
 
-    old = '''static struct sys_thread *
+    original = text
+
+    # Keep the existing Switch registry workaround, but only for the actual
+    # upstream introduce_thread implementation that contains threads_mutex.
+    old_intro = '''static struct sys_thread *
 introduce_thread(pthread_t id)
 {
   struct sys_thread *thread;
@@ -97,7 +48,7 @@ introduce_thread(pthread_t id)
   return thread;
 }'''
 
-    new = '''static struct sys_thread *
+    new_intro = '''static struct sys_thread *
 introduce_thread(pthread_t id)
 {
   struct sys_thread *thread;
@@ -120,51 +71,77 @@ introduce_thread(pthread_t id)
   return thread;
 }'''
 
-    if old in text:
-        text = text.replace(old, new, 1)
-        text = add_thread_runtime_diagnostics(text, path)
+    if old_intro in text:
+        text = text.replace(old_intro, new_intro, 1)
+        print(f'Applied Switch thread-registry workaround: {path}')
+
+    # Add exact checkpoints to sys_thread_new(). This deliberately uses the
+    # known upstream structure instead of guessing line numbers.
+    if '[SWITCH-DIAG] sys_thread_new: after pthread_create' not in text:
+        pthread_marker = '''  if (0 == code) {
+    st = introduce_thread(tmp);
+  }'''
+        pthread_replacement = '''  if (0 == code) {
+#ifdef __SWITCH__
+    printf("[SWITCH-DIAG] sys_thread_new: before introduce_thread\\n");
+    fflush(stdout);
+#endif
+    st = introduce_thread(tmp);
+#ifdef __SWITCH__
+    printf("[SWITCH-DIAG] sys_thread_new: after introduce_thread st=%s\\n", st ? "non-null" : "NULL");
+    fflush(stdout);
+#endif
+  }'''
+        if pthread_marker in text:
+            text = text.replace(pthread_marker, pthread_replacement, 1)
+        else:
+            print(f'WARNING: expected introduce_thread call pattern not found: {path}')
+
+    if '[SWITCH-DIAG] sys_thread_new: checking st' not in text:
+        check_marker = '''  if (NULL == st) {
+'''
+        check_replacement = '''#ifdef __SWITCH__
+  printf("[SWITCH-DIAG] sys_thread_new: checking st after registry\\n");
+  fflush(stdout);
+#endif
+  if (NULL == st) {
+'''
+        if check_marker in text:
+            text = text.replace(check_marker, check_replacement, 1)
+
+    # Put a checkpoint immediately after pthread_create's call. This is the
+    # boundary that the previous NRO reached successfully.
+    if '[SWITCH-DIAG] sys_thread_new: pthread_create completed' not in text:
+        # The upstream call is multiline; anchor on its closing line followed
+        # by the if block, preserving whichever callback form is in this port.
+        pattern = re.compile(r'(\n\s*thread_data\);\n)(\s*\n\s*if \(0 == code\) \{)')
+        match = pattern.search(text)
+        if match:
+            replacement = (
+                match.group(1)
+                + '#ifdef __SWITCH__\n'
+                + '  printf("[SWITCH-DIAG] sys_thread_new: pthread_create completed code=%d\\n", code);\n'
+                + '  fflush(stdout);\n'
+                + '#endif\n'
+                + match.group(2)
+            )
+            text = text[:match.start()] + replacement + text[match.end():]
+        else:
+            # Fallback: inject before the first successful-code block.
+            fallback = re.search(r'(?m)^\s*if \(0 == code\) \{', text)
+            if fallback:
+                indent = re.match(r'\s*', fallback.group(0)).group(0)
+                replacement = (
+                    '#ifdef __SWITCH__\n'
+                    + indent + 'printf("[SWITCH-DIAG] sys_thread_new: pthread_create completed code=%d\\n", code);\n'
+                    + indent + 'fflush(stdout);\n'
+                    + '#endif\n'
+                    + fallback.group(0)
+                )
+                text = text[:fallback.start()] + replacement + text[fallback.end():]
+
+    if text != original:
         path.write_text(text)
-        print(f'Patched Switch lwIP thread registry and runtime diagnostics: {path}')
-        raise SystemExit(0)
+        print(f'Instrumented sys_thread_new runtime path: {path}')
 
-    match = re.search(
-        r'(?m)^\s*(?:static\s+)?struct\s+sys_thread\s*\*\s*introduce_thread\s*\([^)]*\)\s*\{',
-        text,
-    )
-    if match:
-        start = match.end() - 1
-        depth = 0
-        end = None
-        for i in range(start, len(text)):
-            if text[i] == '{':
-                depth += 1
-            elif text[i] == '}':
-                depth -= 1
-                if depth == 0:
-                    end = i + 1
-                    break
-        if end is None:
-            raise SystemExit(f'Could not parse introduce_thread() braces in {path}')
-
-        body = text[start:end]
-        lock_pat = re.compile(r'(?m)^(\s*)pthread_mutex_lock\s*\(\s*&[A-Za-z0-9_]*threads[A-Za-z0-9_]*\s*\)\s*;\s*$')
-        unlock_pat = re.compile(r'(?m)^(\s*)pthread_mutex_unlock\s*\(\s*&[A-Za-z0-9_]*threads[A-Za-z0-9_]*\s*\)\s*;\s*$')
-
-        def wrap(m):
-            indent = m.group(1)
-            statement = m.group(0).strip()
-            return indent + '#ifndef __SWITCH__\n' + indent + statement + '\n' + indent + '#endif'
-
-        body2 = lock_pat.sub(wrap, body)
-        body2 = unlock_pat.sub(wrap, body2)
-
-        if body2 != body:
-            text = text[:start] + body2 + text[end:]
-            text = add_thread_runtime_diagnostics(text, path)
-            path.write_text(text)
-            print(f'Patched Switch lwIP thread registry and runtime diagnostics: {path}')
-            raise SystemExit(0)
-
-    print(f'No Switch thread-registry mutex found in {path}; no patch needed.')
-
-raise SystemExit(0)
+print('LWIP Switch patch/diagnostic pass complete.')
