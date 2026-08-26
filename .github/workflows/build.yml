@@ -60,6 +60,7 @@ jobs:
               p.write_text(s)
           print('OSUtils.cpp sys/uio.h guard: OK')
           PY
+          python3 /__w/switch-ldn-zt/switch-ldn-zt/scripts/patch-lwip-switch-thread.py
 
       - name: Configure libzt
         working-directory: libzt
