@@ -159,17 +159,17 @@ static int init_zerotier_with_diagnostics()
     } else {
         printf("pipe() compatibility failed; ZeroTier cannot start safely. errno=%d\n", errno);
         consoleUpdate(NULL);
-        svcSleepThread(3000000000ULL);
+        svcSleepThread(10000000000ULL);
         return ZTS_ERR_GENERAL;
     }
 
-    svcSleepThread(3000000000ULL);
+    svcSleepThread(10000000000ULL);
     printf("Creating ZeroTier service...\n");
     consoleUpdate(NULL);
     const int rc = zts_init_from_storage("sdmc:/config/zerotier-switch/zt");
     printf("zts_init_from_storage returned: %d\n", rc);
     consoleUpdate(NULL);
-    svcSleepThread(3000000000ULL);
+    svcSleepThread(10000000000ULL);
     return rc;
 }
 
@@ -181,12 +181,12 @@ int main(int argc, char* argv[])
 
     printf("ZeroTier Switch\n------------------------------\nLoading network configuration...\n\n");
     consoleUpdate(NULL);
-    svcSleepThread(3000000000ULL);
+    svcSleepThread(10000000000ULL);
 
     const Result sockRc = socketInitializeDefault();
     printf("socketInitializeDefault: 0x%x\n", sockRc);
     consoleUpdate(NULL);
-    svcSleepThread(3000000000ULL);
+    svcSleepThread(10000000000ULL);
     if (R_FAILED(sockRc)) {
         printf("Failed to bring up the network service. Cannot continue.\nClose the app from the Home menu.\n");
         wait_for_applet_exit();
@@ -210,7 +210,7 @@ int main(int argc, char* argv[])
     printf("Network ID : %016" PRIx64 "\n", g_network_id);
     printf("Starting ZeroTier...\n");
     consoleUpdate(NULL);
-    svcSleepThread(3000000000ULL);
+    svcSleepThread(10000000000ULL);
 
     const int init_rc = init_zerotier_with_diagnostics();
     if (init_rc != ZTS_ERR_OK) {
@@ -225,23 +225,23 @@ int main(int argc, char* argv[])
 
     printf("[DIAG] About to register ZeroTier event handler...\n");
     consoleUpdate(NULL);
-    svcSleepThread(3000000000ULL);
+    svcSleepThread(10000000000ULL);
 
     zts_init_set_event_handler(print_event);
 
     printf("[DIAG] Event handler registration returned.\n");
     consoleUpdate(NULL);
-    svcSleepThread(3000000000ULL);
+    svcSleepThread(10000000000ULL);
 
     printf("[DIAG] About to call zts_node_start()...\n");
     consoleUpdate(NULL);
-    svcSleepThread(3000000000ULL);
+    svcSleepThread(10000000000ULL);
 
     const int start_rc = zts_node_start();
 
     printf("[DIAG] zts_node_start() returned: %d\n", start_rc);
     consoleUpdate(NULL);
-    svcSleepThread(3000000000ULL);
+    svcSleepThread(10000000000ULL);
     if (start_rc != ZTS_ERR_OK) printf("Node start failed.\n");
 
     printf("Waiting for ZeroTier node to come online...\n");
