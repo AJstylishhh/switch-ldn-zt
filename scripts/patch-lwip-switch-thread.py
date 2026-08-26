@@ -1,10 +1,16 @@
 from pathlib import Path
 
+# Keep all existing Switch diagnostics at 3 seconds instead of 5 seconds.
 main_cpp = Path('source/main.cpp')
 if main_cpp.exists():
     text = main_cpp.read_text().replace('5000000000ULL', '3000000000ULL')
     main_cpp.write_text(text)
+    print('Switch diagnostics set to 3 seconds.')
 
+# Patch only the known lwIP Unix thread registry. Do NOT inject diagnostics
+# around pthread_create(): the upstream call spans multiple source lines and
+# inserting a statement after a matching line can corrupt its argument list.
+patched = False
 for path in Path('libzt').rglob('sys_arch.c'):
     try:
         text = path.read_text()
@@ -14,7 +20,6 @@ for path in Path('libzt').rglob('sys_arch.c'):
     if 'sys_thread_new' not in text or 'pthread_create' not in text:
         continue
 
-    original = text
     old_intro = '''static struct sys_thread *
 introduce_thread(pthread_t id)
 {
@@ -55,51 +60,15 @@ introduce_thread(pthread_t id)
   return thread;
 }'''
     if old_intro in text:
-        text = text.replace(old_intro, new_intro, 1)
+        path.write_text(text.replace(old_intro, new_intro, 1))
+        print(f'Patched Switch lwIP thread registry: {path}')
+        patched = True
+        break
 
-    lines = text.splitlines()
-    out = []
-    create_count = 0
-    for line in lines:
-        out.append(line)
-        if 'pthread_create(' in line and not line.lstrip().startswith('//'):
-            create_count += 1
-            out.extend([
-                '#ifdef __SWITCH__',
-                f'  printf("[SWITCH-DIAG] POST_PTHREAD_CREATE_{create_count}\\n");',
-                '  fflush(stdout);',
-                '#endif',
-            ])
-    text = '\n'.join(out) + ('\n' if text.endswith('\n') else '')
+    if '#ifdef __SWITCH__' in text and 'thread->next = NULL;' in text and 'threads_mutex' in text:
+        print(f'Switch lwIP thread registry workaround already present: {path}')
+        patched = True
+        break
 
-    if 'BEFORE_INTRODUCE' not in text and 'st = introduce_thread(tmp);' in text:
-        text = text.replace(
-            'st = introduce_thread(tmp);',
-            '#ifdef __SWITCH__\n'
-            '  printf("[SWITCH-DIAG] BEFORE_INTRODUCE\\n");\n'
-            '  fflush(stdout);\n'
-            '#endif\n'
-            '  st = introduce_thread(tmp);\n'
-            '#ifdef __SWITCH__\n'
-            '  printf("[SWITCH-DIAG] AFTER_INTRODUCE\\n");\n'
-            '  fflush(stdout);\n'
-            '#endif',
-            1,
-        )
-
-    if 'SYS_THREAD_NEW_RETURN' not in text and 'return st;' in text:
-        text = text.replace(
-            'return st;',
-            '#ifdef __SWITCH__\n'
-            '  printf("[SWITCH-DIAG] SYS_THREAD_NEW_RETURN\\n");\n'
-            '  fflush(stdout);\n'
-            '#endif\n'
-            '  return st;',
-            1,
-        )
-
-    if text != original:
-        path.write_text(text)
-        print(f'Patched {path}: {create_count} pthread_create marker(s).')
-
-print('Switch diagnostics remain 3 seconds.')
+if not patched:
+    print('No matching lwIP sys_arch.c thread-registry implementation found; no thread patch applied.')
