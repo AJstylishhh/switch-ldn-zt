@@ -77,8 +77,8 @@ jobs:
             -DALLOW_INSTALL_TARGET=OFF \
             -DZTS_DISABLE_CENTRAL_API=ON \
             -DSWITCH=ON \
-            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port/include" \
-            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port/include"
+            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port/include" \
+            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port/include"
 
       - name: Verify Switch flags and lwIP port
         working-directory: libzt
@@ -86,6 +86,7 @@ jobs:
           set -eu
           grep -R -- "-D__SWITCH__" build-switch/CMakeFiles | head -20
           grep -R -- "-DFD_SETSIZE=1024" build-switch/CMakeFiles | head -5
+          grep -R -- "LWIP_PROVIDE_ERRNO" build-switch/CMakeFiles | head -10
           grep -R -- "ext/lwip-contrib/ports/unix/port/include" build-switch/CMakeFiles | head -20
           test -f ext/lwip-contrib/ports/unix/port/include/arch/cc.h
           test -f ext/lwip-contrib/ports/unix/port/include/arch/sys_arch.h
