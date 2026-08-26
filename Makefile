@@ -20,10 +20,10 @@ CXXFLAGS := -g -Wall -O2 -ffunction-sections $(ARCH) $(INCLUDE) -D__SWITCH__ -fn
 LDFLAGS := -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(TARGET).map
 
 LIBDIRS := $(PORTLIBS) $(LIBNX) $(CURDIR)/third_party/libzt
-# libzt is a C++ static library. Explicitly link libstdc++ because the
-# Switch static link does not otherwise pull in the C++ runtime symbols used
-# by ZeroTier (operator new/delete, std:: containers, __cxa_*).
-LIBS := -lzt -lstdc++ -lnx
+# libzt is a C++ static library. Explicitly link the C++ and math runtimes.
+# ZeroTier uses std:: containers/exceptions machinery and libm functions such
+# as sqrt/expf/sqrtf.
+LIBS := -lzt -lstdc++ -lm -lnx
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 
