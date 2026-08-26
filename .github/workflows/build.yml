@@ -142,8 +142,8 @@ jobs:
           make clean
           make
           test -s zerotier-switch.nro
-          file zerotier-switch.nro
-          ls -lh zerotier-switch.nro
+          test -s zerotier-switch.nacp
+          ls -lh zerotier-switch.nro zerotier-switch.nacp
 
       - name: Upload ZeroTier Switch NRO
         uses: actions/upload-artifact@v4
