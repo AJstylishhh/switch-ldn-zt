@@ -223,11 +223,23 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    zts_init_set_event_handler(print_event);
-    printf("Starting ZeroTier node...\n");
+    printf("[DIAG] About to register ZeroTier event handler...\n");
     consoleUpdate(NULL);
+    svcSleepThread(3000000000ULL);
+
+    zts_init_set_event_handler(print_event);
+
+    printf("[DIAG] Event handler registration returned.\n");
+    consoleUpdate(NULL);
+    svcSleepThread(3000000000ULL);
+
+    printf("[DIAG] About to call zts_node_start()...\n");
+    consoleUpdate(NULL);
+    svcSleepThread(3000000000ULL);
+
     const int start_rc = zts_node_start();
-    printf("zts_node_start: %d\n", start_rc);
+
+    printf("[DIAG] zts_node_start() returned: %d\n", start_rc);
     consoleUpdate(NULL);
     svcSleepThread(3000000000ULL);
     if (start_rc != ZTS_ERR_OK) printf("Node start failed.\n");
