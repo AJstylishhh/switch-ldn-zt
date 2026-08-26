@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cinttypes>
+#include <cerrno>
 #include <sys/stat.h>
 
 static uint64_t g_network_id = 0;
