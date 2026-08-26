@@ -3,9 +3,12 @@
 #include <sys/socket.h>
 
 // ZeroTier's lwIP/Unix compatibility layer expects a POSIX errno object.
-// libnx/newlib exposes errno through __errno(), while the lwIP Unix port used
-// by libzt declares a plain external errno. Keep a dedicated errno object for
-// that compatibility boundary rather than trying to alias newlib internals.
+// libnx/newlib normally exposes errno through __errno(), while the lwIP Unix
+// port used by libzt declares a plain external errno. Keep a dedicated errno
+// object for that compatibility boundary.
+#ifdef errno
+#undef errno
+#endif
 extern "C" int errno = 0;
 
 // ZeroTier's VirtualTap/NodeService use pipe() only as a pair of pollable
