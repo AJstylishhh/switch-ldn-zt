@@ -200,6 +200,7 @@ int main(int argc, char* argv[])
     printf("------------------------------\n");
     printf("Loading network configuration...\n\n");
     consoleUpdate(NULL);
+    svcSleepThread(3000000000ULL); // 3s pause so you can actually read this before anything risky runs
 
     // libzt needs the console's own network service running before it can open
     // any real socket to reach ZeroTier's servers over the internet. Without this,
@@ -207,6 +208,7 @@ int main(int argc, char* argv[])
     const Result sockRc = socketInitializeDefault();
     printf("socketInitializeDefault: 0x%x\n", sockRc);
     consoleUpdate(NULL);
+    svcSleepThread(3000000000ULL);
     if (R_FAILED(sockRc)) {
         printf("Failed to bring up the network service. Cannot continue.\n");
         printf("Close the app from the Home menu.\n");
@@ -235,6 +237,8 @@ int main(int argc, char* argv[])
 
     printf("Network ID : %016" PRIx64 "\n", g_network_id);
     printf("Starting ZeroTier...\n");
+    consoleUpdate(NULL);
+    svcSleepThread(3000000000ULL);
 
     const int init_rc = zts_init_from_storage("sdmc:/config/zerotier-switch/zt");
     printf("zts_init_from_storage: %d\n", init_rc);
