@@ -41,7 +41,7 @@ jobs:
       - name: Patch libzt for Switch
         run: |
           set -eu
-          python3 scripts/patch-libzt-switch.py
+          python3 scripts/patch-libzt-switch-bootstrap.py
 
       - name: Patch remaining Switch portability gaps
         working-directory: libzt
