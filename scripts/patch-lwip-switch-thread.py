@@ -3,14 +3,61 @@ import re
 
 # Keep the Switch app's diagnostics short enough to be practical while still
 # preserving a visible pause at every checkpoint. This runs before the
-# thread-registry patch so it is not skipped by the early-exit compatibility
-# paths below.
+# thread-registry patch so it is not skipped by early compatibility exits.
 main_cpp = Path('source/main.cpp')
 if main_cpp.exists():
     main_text = main_cpp.read_text()
     main_text = main_text.replace('5000000000ULL', '3000000000ULL')
     main_cpp.write_text(main_text)
     print('Switch diagnostics reduced to 3 seconds.')
+
+
+def add_thread_runtime_diagnostics(text, path):
+    """Instrument the exact gap after pthread_create() and introduce_thread()."""
+    if '[SWITCH-DIAG] after pthread_create' in text:
+        return text
+
+    # The bootstrap already adds <switch.h> and the existing diagnostics.
+    # Add two markers around the suspected blocking operation so the next NRO
+    # tells us whether the hang is inside introduce_thread(), after it, or in
+    # some later sys_thread_new bookkeeping.
+    create_pat = re.compile(
+        r'(code\s*=\s*pthread_create\s*\(.*?\);)',
+        re.S,
+    )
+    match = create_pat.search(text)
+    if match:
+        insertion = (
+            match.group(1)
+            + '\n#ifdef __SWITCH__\n'
+            + '  printf("[SWITCH-DIAG] after pthread_create; entering st/registry path\\n");\n'
+            + '  consoleUpdate(NULL);\n'
+            + '#endif'
+        )
+        text = text[:match.start()] + insertion + text[match.end():]
+
+    # Instrument the common introduce_thread(tmp) assignment. Keep this
+    # independent of whitespace so it survives upstream lwIP formatting.
+    intro_pat = re.compile(r'(?m)^(\s*)(st\s*=\s*introduce_thread\s*\(\s*tmp\s*\)\s*;)\s*$')
+    m = intro_pat.search(text)
+    if m:
+        indent = m.group(1)
+        statement = m.group(2)
+        replacement = (
+            indent + '#ifdef __SWITCH__\n'
+            + indent + 'printf("[SWITCH-DIAG] before introduce_thread(tmp)\\n");\n'
+            + indent + 'consoleUpdate(NULL);\n'
+            + indent + '#endif\n'
+            + indent + statement + '\n'
+            + indent + '#ifdef __SWITCH__\n'
+            + indent + 'printf("[SWITCH-DIAG] after introduce_thread(tmp): %s\\n", st ? "non-null" : "NULL");\n'
+            + indent + 'consoleUpdate(NULL);\n'
+            + indent + '#endif'
+        )
+        text = text[:m.start()] + replacement + text[m.end():]
+
+    return text
+
 
 # The lwIP Unix port has changed its thread bookkeeping across versions.
 # Some versions keep a pthread registry protected by threads_mutex; newer
@@ -29,12 +76,9 @@ for path in candidates:
         print(f'Could not read {path}: {exc}')
         continue
 
-    # Skip sys_arch.c implementations that do not use the Unix pthread thread
-    # registry. They do not need this compatibility patch.
     if 'sys_thread_new(' not in text or 'pthread_create' not in text:
         continue
 
-    # First handle the known upstream implementation directly.
     old = '''static struct sys_thread *
 introduce_thread(pthread_t id)
 {
@@ -77,11 +121,12 @@ introduce_thread(pthread_t id)
 }'''
 
     if old in text:
-        path.write_text(text.replace(old, new, 1))
-        print(f'Patched Switch lwIP thread registry (known layout): {path}')
+        text = text.replace(old, new, 1)
+        text = add_thread_runtime_diagnostics(text, path)
+        path.write_text(text)
+        print(f'Patched Switch lwIP thread registry and runtime diagnostics: {path}')
         raise SystemExit(0)
 
-    # Other upstream versions may format introduce_thread() differently.
     match = re.search(
         r'(?m)^\s*(?:static\s+)?struct\s+sys_thread\s*\*\s*introduce_thread\s*\([^)]*\)\s*\{',
         text,
@@ -114,12 +159,12 @@ introduce_thread(pthread_t id)
         body2 = unlock_pat.sub(wrap, body2)
 
         if body2 != body:
-            path.write_text(text[:start] + body2 + text[end:])
-            print(f'Patched Switch lwIP thread registry (alternate layout): {path}')
+            text = text[:start] + body2 + text[end:]
+            text = add_thread_runtime_diagnostics(text, path)
+            path.write_text(text)
+            print(f'Patched Switch lwIP thread registry and runtime diagnostics: {path}')
             raise SystemExit(0)
 
-    # This is a pthread-backed sys_arch.c but it has no introduce_thread()
-    # registry. That is valid and requires no registry compatibility patch.
     print(f'No Switch thread-registry mutex found in {path}; no patch needed.')
 
 raise SystemExit(0)
