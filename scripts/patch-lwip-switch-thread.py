@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 main_cpp = Path('source/main.cpp')
 if main_cpp.exists():
@@ -16,7 +15,6 @@ for path in Path('libzt').rglob('sys_arch.c'):
         continue
 
     original = text
-
     old_intro = '''static struct sys_thread *
 introduce_thread(pthread_t id)
 {
@@ -59,46 +57,49 @@ introduce_thread(pthread_t id)
     if old_intro in text:
         text = text.replace(old_intro, new_intro, 1)
 
-    # Instrument every pthread_create statement, without assuming the name of
-    # its return-code variable or the exact upstream formatting.
-    counter = [0]
-    def mark_create(match):
-        counter[0] += 1
-        return (match.group(0) +
-                '\n#ifdef __SWITCH__\n'
-                f'  printf("[SWITCH-DIAG] POST_PTHREAD_CREATE_{counter[0]}\\n");\n'
-                '  fflush(stdout);\n'
-                '#endif')
-    text = re.sub(r'pthread_create\s*\([^;]*?\);', mark_create, text, flags=re.S)
+    lines = text.splitlines()
+    out = []
+    create_count = 0
+    for line in lines:
+        out.append(line)
+        if 'pthread_create(' in line and not line.lstrip().startswith('//'):
+            create_count += 1
+            out.extend([
+                '#ifdef __SWITCH__',
+                f'  printf("[SWITCH-DIAG] POST_PTHREAD_CREATE_{create_count}\\n");',
+                '  fflush(stdout);',
+                '#endif',
+            ])
+    text = '\n'.join(out) + ('\n' if text.endswith('\n') else '')
 
-    # Instrument direct introduce_thread assignments if present.
-    def mark_intro(match):
-        args = match.group(1)
-        return ('#ifdef __SWITCH__\n'
-                '  printf("[SWITCH-DIAG] BEFORE_INTRODUCE\\n");\n'
-                '  fflush(stdout);\n'
-                '#endif\n'
-                f'  st = introduce_thread({args});\n'
-                '#ifdef __SWITCH__\n'
-                '  printf("[SWITCH-DIAG] AFTER_INTRODUCE\\n");\n'
-                '  fflush(stdout);\n'
-                '#endif')
-    text, intro_count = re.subn(
-        r'(?m)^\s*st\s*=\s*introduce_thread\s*\(([^;]*?)\)\s*;',
-        mark_intro,
-        text,
-    )
+    if 'BEFORE_INTRODUCE' not in text and 'st = introduce_thread(tmp);' in text:
+        text = text.replace(
+            'st = introduce_thread(tmp);',
+            '#ifdef __SWITCH__\n'
+            '  printf("[SWITCH-DIAG] BEFORE_INTRODUCE\\n");\n'
+            '  fflush(stdout);\n'
+            '#endif\n'
+            '  st = introduce_thread(tmp);\n'
+            '#ifdef __SWITCH__\n'
+            '  printf("[SWITCH-DIAG] AFTER_INTRODUCE\\n");\n'
+            '  fflush(stdout);\n'
+            '#endif',
+            1,
+        )
 
-    if '[SWITCH-DIAG] SYS_THREAD_NEW_RETURN' not in text:
-        text = re.sub(
-            r'(?m)^\s*return\s+st\s*;',
-            '  #ifdef __SWITCH__\n  printf("[SWITCH-DIAG] SYS_THREAD_NEW_RETURN\\n"); fflush(stdout);\n  #endif\n  return st;',
-            text,
-            count=1,
+    if 'SYS_THREAD_NEW_RETURN' not in text and 'return st;' in text:
+        text = text.replace(
+            'return st;',
+            '#ifdef __SWITCH__\n'
+            '  printf("[SWITCH-DIAG] SYS_THREAD_NEW_RETURN\\n");\n'
+            '  fflush(stdout);\n'
+            '#endif\n'
+            '  return st;',
+            1,
         )
 
     if text != original:
         path.write_text(text)
-        print(f'Instrumented {counter[0]} pthread_create site(s), {intro_count} introduce_thread call(s): {path}')
+        print(f'Patched {path}: {create_count} pthread_create marker(s).')
 
-print('Switch diagnostics remain 3 seconds; broad post-pthread instrumentation complete.')
+print('Switch diagnostics remain 3 seconds.')
