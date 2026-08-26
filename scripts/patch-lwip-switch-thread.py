@@ -1,6 +1,17 @@
 from pathlib import Path
 import re
 
+# Keep the Switch app's diagnostics short enough to be practical while still
+# preserving a visible pause at every checkpoint. This runs before the
+# thread-registry patch so it is not skipped by the early-exit compatibility
+# paths below.
+main_cpp = Path('source/main.cpp')
+if main_cpp.exists():
+    main_text = main_cpp.read_text()
+    main_text = main_text.replace('5000000000ULL', '3000000000ULL')
+    main_cpp.write_text(main_text)
+    print('Switch diagnostics reduced to 3 seconds.')
+
 # The lwIP Unix port has changed its thread bookkeeping across versions.
 # Some versions keep a pthread registry protected by threads_mutex; newer
 # versions do not have that registry at all. The Switch build must patch the
@@ -110,14 +121,5 @@ introduce_thread(pthread_t id)
     # This is a pthread-backed sys_arch.c but it has no introduce_thread()
     # registry. That is valid and requires no registry compatibility patch.
     print(f'No Switch thread-registry mutex found in {path}; no patch needed.')
-
-# Keep the Switch app's diagnostics short enough to be practical while still
-# preserving a visible pause at every checkpoint.
-main_cpp = Path('source/main.cpp')
-if main_cpp.exists():
-    main_text = main_cpp.read_text()
-    main_text = main_text.replace('5000000000ULL', '3000000000ULL')
-    main_cpp.write_text(main_text)
-    print('Switch diagnostics reduced to 3 seconds.')
 
 raise SystemExit(0)
