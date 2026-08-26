@@ -93,11 +93,8 @@ introduce_thread(pthread_t id)
         body = text[start:end]
         lock_pat = re.compile(r'(?m)^(\s*)pthread_mutex_lock\s*\(\s*&[A-Za-z0-9_]*threads[A-Za-z0-9_]*\s*\)\s*;\s*$')
         unlock_pat = re.compile(r'(?m)^(\s*)pthread_mutex_unlock\s*\(\s*&[A-Za-z0-9_]*threads[A-Za-z0-9_]*\s*\)\s*;\s*$')
-        changed = False
 
         def wrap(m):
-            nonlocal changed
-            changed = True
             indent = m.group(1)
             statement = m.group(0).strip()
             return indent + '#ifndef __SWITCH__\n' + indent + statement + '\n' + indent + '#endif'
@@ -105,7 +102,7 @@ introduce_thread(pthread_t id)
         body2 = lock_pat.sub(wrap, body)
         body2 = unlock_pat.sub(wrap, body2)
 
-        if changed:
+        if body2 != body:
             path.write_text(text[:start] + body2 + text[end:])
             print(f'Patched Switch lwIP thread registry (alternate layout): {path}')
             raise SystemExit(0)
