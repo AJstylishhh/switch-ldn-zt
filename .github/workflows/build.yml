@@ -14,6 +14,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify checked-out sources
+        run: |
+          set -eu
+          echo "Commit: $(git rev-parse HEAD)"
+          echo "LWIP patch script:"
+          sha256sum scripts/patch-lwip-switch-thread.py
+          python3 -m py_compile scripts/patch-lwip-switch-thread.py
+          if grep -n 'nonlocal changed' scripts/patch-lwip-switch-thread.py; then
+            echo 'ERROR: stale nonlocal changed code is present in the checked-out script.'
+            exit 1
+          fi
+          echo 'LWIP patch script syntax/stale-code check: OK'
+
       - name: Verify devkitA64
         run: |
           set -eu
@@ -44,12 +57,11 @@ jobs:
           python3 scripts/patch-libzt-switch-bootstrap.py
 
       - name: Patch remaining Switch portability gaps
-        working-directory: libzt
         run: |
           set -eu
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('ext/ZeroTierOne/osdep/OSUtils.cpp')
+          p = Path('libzt/ext/ZeroTierOne/osdep/OSUtils.cpp')
           s = p.read_text()
           needle = '#include <sys/uio.h>'
           wrapped = '#ifndef __SWITCH__\n#include <sys/uio.h>\n#endif'
@@ -60,7 +72,12 @@ jobs:
               p.write_text(s)
           print('OSUtils.cpp sys/uio.h guard: OK')
           PY
-          python3 /__w/switch-ldn-zt/switch-ldn-zt/scripts/patch-lwip-switch-thread.py
+
+          echo 'Using checked-out lwIP patch script:'
+          sha256sum scripts/patch-lwip-switch-thread.py
+          python3 -m py_compile scripts/patch-lwip-switch-thread.py
+          ! grep -q 'nonlocal changed' scripts/patch-lwip-switch-thread.py
+          python3 scripts/patch-lwip-switch-thread.py
 
       - name: Configure libzt
         working-directory: libzt
