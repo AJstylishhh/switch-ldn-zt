@@ -51,8 +51,6 @@ if '#ifndef __SWITCH__\n#include <ifaddrs.h>\n#endif' not in bs:
         raise SystemExit('Binder.hpp ifaddrs include not found')
     bs = bs2
 
-# The upstream fallback enumeration is not usable on Switch. Guard only its
-# top-level preprocessor line; this avoids fragile multiline block matching.
 replacement_start = '#if ! defined(__ANDROID__) && ! defined(__SWITCH__)\t // getifaddrs unavailable on Switch'
 pattern = re.compile(r'^\s*#if\s*!\s*defined\(__ANDROID__\).*getifaddrs\(\).*$', re.MULTILINE)
 bs2, count = pattern.subn(replacement_start, bs, count=1)
@@ -62,7 +60,6 @@ if count != 1:
     bs2 = bs
 bs = bs2
 
-# Force the existing wildcard-address fallback on Switch.
 if 'interfacesEnumerated = false;' not in bs:
     marker = 'bool interfacesEnumerated = true;'
     if marker not in bs:
@@ -76,41 +73,31 @@ if 'interfacesEnumerated = false;' not in bs:
 binder.write_text(bs)
 
 
-# Phy: the Switch runtime does not provide Unix-domain sockets. The generic Phy
-# template still contains a few Unix-only helpers because __UNIX_LIKE__ is useful
-# for other core code. Guard the system header and the cleanup that dereferences
-# sockaddr_un so Switch builds do not require that type.
+# Phy: Switch does not provide the Unix-domain socket implementation used by
+# ZeroTier's generic Unix PHY helpers.
 phy = Path('libzt/ext/ZeroTierOne/osdep/Phy.hpp')
 ps = phy.read_text()
-
 ps2, count = re.subn(
     r'#include\s*<sys/un\.h>',
     '#ifndef __SWITCH__\n#include <sys/un.h>\n#endif',
     ps,
     count=1,
 )
-if count != 1:
-    if '#ifndef __SWITCH__\n#include <sys/un.h>\n#endif' not in ps:
-        raise SystemExit('Phy.hpp sys/un.h include not found')
-    ps2 = ps
+if count != 1 and '#ifndef __SWITCH__\n#include <sys/un.h>\n#endif' not in ps:
+    raise SystemExit('Phy.hpp sys/un.h include not found')
 ps = ps2
-
-# In close(), never touch sockaddr_un on Switch because Switch does not expose
-# AF_UNIX/Unix-domain sockets. Keep the upstream behavior on normal Unix builds.
 cleanup_pattern = re.compile(
     r'(?ms)^\s*#ifdef __UNIX_LIKE__\s*\n\s*if \(sws\.type == ZT_PHY_SOCKET_UNIX_LISTEN\)\s*\n\s*::unlink\(\(\(struct sockaddr_un \*\)\(\&\(sws\.saddr\)\)\)->sun_path\);\s*\n\s*#endif\s*// __UNIX_LIKE__'
 )
 cleanup_replacement = '''\n#ifdef __UNIX_LIKE__\n#if !defined(__SWITCH__)\n\t\tif (sws.type == ZT_PHY_SOCKET_UNIX_LISTEN)\n\t\t\t::unlink(((struct sockaddr_un*)(&(sws.saddr)))->sun_path);\n#endif\t // !__SWITCH__\n#endif\t // __UNIX_LIKE__'''
 ps2, count = cleanup_pattern.subn(cleanup_replacement, ps, count=1)
-if count != 1:
-    if 'if (sws.type == ZT_PHY_SOCKET_UNIX_LISTEN)' not in ps:
-        raise SystemExit('Phy.hpp Unix-socket cleanup block not found')
+if count != 1 and 'if (sws.type == ZT_PHY_SOCKET_UNIX_LISTEN)' in ps:
+    raise SystemExit('Phy.hpp Unix-socket cleanup block not found')
 ps = ps2
 phy.write_text(ps)
 
 
-# Utils.cpp: sys/uio.h is a desktop/Unix header and is not needed by the Switch
-# build. Keep it for normal Unix builds.
+# Utils.cpp: desktop-only Unix headers/capability probes.
 utils_cpp = Path('libzt/ext/ZeroTierOne/node/Utils.cpp')
 us = utils_cpp.read_text()
 u2, count = re.subn(
@@ -119,16 +106,9 @@ u2, count = re.subn(
     us,
     count=1,
 )
-if count != 1:
-    if '#ifndef __SWITCH__\n#include <sys/uio.h>\n#endif' not in us:
-        raise SystemExit('Utils.cpp sys/uio.h include not found')
-    u2 = us
-utils_cpp.write_text(u2)
-
-# Utils.cpp: devkitA64 does not provide the Linux getauxval()/AT_HWCAP API.
-# ZeroTier's ARM capability probe is an optimization; on Switch we safely report
-# no runtime-detected optional CPU features and let portable implementations run.
-us = utils_cpp.read_text()
+if count != 1 and '#ifndef __SWITCH__\n#include <sys/uio.h>\n#endif' not in us:
+    raise SystemExit('Utils.cpp sys/uio.h include not found')
+us = u2
 if '#ifdef __SWITCH__\n\tconst long hwcaps = 0;' not in us:
     hw2, count = re.subn(
         r'(?m)^(\s*)const long hwcaps = getauxval\(AT_HWCAP\);',
@@ -142,7 +122,7 @@ if '#ifdef __SWITCH__\n\tconst long hwcaps = 0;' not in us:
 utils_cpp.write_text(us)
 
 
-# CMake: do not link desktop port mapper or NAT helper objects for Switch.
+# CMake: disable desktop-only port-mapper/NAT helper objects on Switch.
 cm = Path('libzt/CMakeLists.txt')
 cs = cm.read_text()
 cs = cs.replace('${ZTO_SRC_DIR}/osdep/PortMapper.cpp', '', 1)
@@ -152,11 +132,19 @@ cs = cs.replace(
     'if(NOT SWITCH)\n    set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")\nendif()',
     1,
 )
+# The cross-toolchain reports CMAKE_SYSTEM_NAME=Switch, so CMake's normal
+# UNIX test is false. Without this, lwipSrcGlob contains no sys_arch.c and
+# the final application gets unresolved sys_* symbols.
+needle = 'if(UNIX)\n    set(LWIP_PORT_DIR ${PROJ_DIR}/ext/lwip-contrib/ports/unix/port)\nendif()'
+replacement = 'if(UNIX OR SWITCH OR CMAKE_SYSTEM_NAME STREQUAL "Switch")\n    set(LWIP_PORT_DIR ${PROJ_DIR}/ext/lwip-contrib/ports/unix/port)\nendif()'
+if needle in cs:
+    cs = cs.replace(needle, replacement, 1)
+elif 'if(UNIX OR SWITCH OR CMAKE_SYSTEM_NAME STREQUAL "Switch")' not in cs:
+    raise SystemExit('CMake lwIP port directory block not found')
 cm.write_text(cs)
 
 
-# lwIP: libzt's Generic Switch toolchain does not automatically add the Unix port
-# include directory, so provide arch/cc.h at the path lwIP itself searches.
+# lwIP compatibility headers.
 port_cc = Path('libzt/ext/lwip-contrib/ports/unix/port/include/arch/cc.h')
 if not port_cc.exists():
     raise SystemExit('lwIP Unix port arch/cc.h not found')
