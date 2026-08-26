@@ -199,6 +199,22 @@ int main(int argc, char* argv[])
     printf("ZeroTier Switch\n");
     printf("------------------------------\n");
     printf("Loading network configuration...\n\n");
+    consoleUpdate(NULL);
+
+    // libzt needs the console's own network service running before it can open
+    // any real socket to reach ZeroTier's servers over the internet. Without this,
+    // zts_node_start() below can crash before ever printing anything further.
+    const Result sockRc = socketInitializeDefault();
+    printf("socketInitializeDefault: 0x%x\n", sockRc);
+    consoleUpdate(NULL);
+    if (R_FAILED(sockRc)) {
+        printf("Failed to bring up the network service. Cannot continue.\n");
+        printf("Close the app from the Home menu.\n");
+        wait_for_applet_exit();
+        fsdevUnmountDevice("sdmc");
+        consoleExit(NULL);
+        return 1;
+    }
 
     mkdir("sdmc:/config", 0777);
     mkdir("sdmc:/config/zerotier-switch", 0777);
@@ -285,6 +301,7 @@ shutdown:
     printf("\nStopping ZeroTier...\n");
     zts_node_stop();
     zts_node_free();
+    socketExit();
     fsdevUnmountDevice("sdmc");
     consoleExit(NULL);
     return 0;
