@@ -132,6 +132,15 @@ cs = cs.replace(
     'if(NOT SWITCH)\n    set(ZT_FLAGS "${ZT_FLAGS} -DZT_USE_MINIUPNPC=1")\nendif()',
     1,
 )
+# The Switch app uses the libzt socket API rather than the desktop ZeroTier
+# virtual-tap/control-service helpers. Those two files pull in host-only
+# pipe()/Unix control-channel machinery which libnx does not provide.
+marker = 'file(GLOB ztcoreSrcGlob ${ZTO_SRC_DIR}/node/*.cpp\n         ${ZTO_SRC_DIR}/osdep/OSUtils.cpp ${ZTO_SRC_DIR}/osdep/PortMapper.cpp)'
+replacement = '''file(GLOB ztcoreSrcGlob ${ZTO_SRC_DIR}/node/*.cpp\n         ${ZTO_SRC_DIR}/osdep/OSUtils.cpp)\nif(SWITCH OR CMAKE_SYSTEM_NAME STREQUAL "Switch")\n    list(REMOVE_ITEM ztcoreSrcGlob\n        ${ZTO_SRC_DIR}/node/VirtualTap.cpp\n        ${ZTO_SRC_DIR}/node/NodeService.cpp)\nendif()'''
+if marker in cs:
+    cs = cs.replace(marker, replacement, 1)
+elif 'list(REMOVE_ITEM ztcoreSrcGlob' not in cs:
+    raise SystemExit('CMake ztcore source glob not found')
 # The cross-toolchain reports CMAKE_SYSTEM_NAME=Switch, so CMake's normal
 # UNIX test is false. Without this, lwipSrcGlob contains no sys_arch.c and
 # the final application gets unresolved sys_* symbols.
