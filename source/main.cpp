@@ -1,5 +1,4 @@
 #include <switch.h>
-#include <switch/services/hid.h>
 #include <ZeroTierSockets.h>
 
 #include <cstdio>
@@ -58,9 +57,9 @@ static bool read_text_file(const char* path, char* out, size_t out_len)
 
     out[n] = '\0';
 
-    // Strip simple whitespace/newlines so config files can be edited normally.
-    while (n > 0 && (out[n - 1] == '\n' || out[n - 1] == '\r' || out[n - 1] == ' ' || out[n - 1] == '\t')) {
-        out[n - 1] = '\0';
+    size_t len = n;
+    while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r' || out[len - 1] == ' ' || out[len - 1] == '\t')) {
+        out[--len] = '\0';
     }
 
     return out[0] != '\0';
@@ -79,6 +78,14 @@ static bool read_network_id(uint64_t& out)
 
     out = static_cast<uint64_t>(value);
     return true;
+}
+
+static void wait_for_applet_exit()
+{
+    while (appletMainLoop()) {
+        consoleUpdate(NULL);
+        zts_util_delay(50);
+    }
 }
 
 static void run_transport_probe()
@@ -201,14 +208,8 @@ int main(int argc, char* argv[])
         printf("/config/zerotier-switch/network_id.txt\n\n");
         printf("Put your 16-digit ZeroTier network ID inside it.\n");
         printf("Example: 8056c2e21c000001\n\n");
-        printf("Press + to exit.\n");
-
-        while (appletMainLoop()) {
-            hidScanInput();
-            if (hidKeysDown(CONTROLLER_P1_AUTO) & KEY_PLUS) break;
-            consoleUpdate(NULL);
-        }
-
+        printf("Close the app from the Home menu.\n");
+        wait_for_applet_exit();
         fsdevUnmountDevice("sdmc");
         consoleExit(NULL);
         return 0;
@@ -221,12 +222,8 @@ int main(int argc, char* argv[])
     printf("zts_init_from_storage: %d\n", init_rc);
     if (init_rc != ZTS_ERR_OK) {
         printf("Initialization failed.\n");
-        printf("Press + to exit.\n");
-        while (appletMainLoop()) {
-            hidScanInput();
-            if (hidKeysDown(CONTROLLER_P1_AUTO) & KEY_PLUS) break;
-            consoleUpdate(NULL);
-        }
+        printf("Close the app from the Home menu.\n");
+        wait_for_applet_exit();
         fsdevUnmountDevice("sdmc");
         consoleExit(NULL);
         return 1;
@@ -243,8 +240,6 @@ int main(int argc, char* argv[])
     printf("Waiting for ZeroTier node to come online...\n");
     int waited = 0;
     while (appletMainLoop() && !zts_node_is_online() && waited < 300) {
-        hidScanInput();
-        if (hidKeysDown(CONTROLLER_P1_AUTO) & KEY_PLUS) goto shutdown;
         zts_util_delay(100);
         waited++;
         consoleUpdate(NULL);
@@ -260,8 +255,6 @@ int main(int argc, char* argv[])
         printf("Waiting for network transport...\n");
         waited = 0;
         while (appletMainLoop() && !zts_net_transport_is_ready(g_network_id) && waited < 300) {
-            hidScanInput();
-            if (hidKeysDown(CONTROLLER_P1_AUTO) & KEY_PLUS) goto shutdown;
             zts_util_delay(100);
             waited++;
             consoleUpdate(NULL);
@@ -270,8 +263,6 @@ int main(int argc, char* argv[])
         printf("Waiting for ZeroTier IPv4 assignment...\n");
         waited = 0;
         while (appletMainLoop() && !zts_addr_is_assigned(g_network_id, ZTS_AF_INET) && waited < 300) {
-            hidScanInput();
-            if (hidKeysDown(CONTROLLER_P1_AUTO) & KEY_PLUS) goto shutdown;
             zts_util_delay(100);
             waited++;
             consoleUpdate(NULL);
@@ -284,13 +275,9 @@ int main(int argc, char* argv[])
     printf("------\n");
     printf("ZeroTier : %s\n", zts_node_is_online() ? "ONLINE" : "OFFLINE");
     printf("Network  : %s\n", zts_net_transport_is_ready(g_network_id) ? "READY" : "NOT READY");
-    printf("\nPress + to exit.\n");
+    printf("\nClose the app from the Home menu.\n");
 
-    while (appletMainLoop()) {
-        hidScanInput();
-        if (hidKeysDown(CONTROLLER_P1_AUTO) & KEY_PLUS) break;
-        consoleUpdate(NULL);
-    }
+    wait_for_applet_exit();
 
 shutdown:
     printf("\nStopping ZeroTier...\n");
