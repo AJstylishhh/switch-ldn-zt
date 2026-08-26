@@ -8,6 +8,7 @@ on:
 jobs:
   build-libzt-switch:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     container: devkitpro/devkita64:latest
 
     steps:
