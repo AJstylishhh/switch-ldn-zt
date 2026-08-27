@@ -20,9 +20,6 @@ CXXFLAGS := -g -Wall -O2 -ffunction-sections $(ARCH) $(INCLUDE) -D__SWITCH__ -fn
 LDFLAGS := -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(TARGET).map
 
 LIBDIRS := $(PORTLIBS) $(LIBNX) $(CURDIR)/third_party/libzt
-# libzt is a C++ static library. Explicitly link the C++ and math runtimes.
-# ZeroTier uses std:: containers/exceptions machinery and libm functions such
-# as sqrt/expf/sqrtf.
 LIBS := -lzt -lstdc++ -lm -lnx
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
@@ -32,13 +29,9 @@ export TOPDIR := $(CURDIR)
 export VPATH := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
 export DEPSDIR := $(CURDIR)/$(BUILD)
 
-# Discover the application sources while TOPDIR still points at the repository.
-# The recursive make below runs from $(BUILD), so this must be rooted at TOPDIR.
 CPPFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(TOPDIR)/$(dir)/*.cpp)))
 OFILES_SRC := $(CPPFILES:.cpp=.o)
 
-# IMPORTANT: the recursive make receives only exported variables. Export the
-# object list explicitly so source/main.cpp becomes source/main.o and is linked.
 export OFILES := $(OFILES_SRC)
 
 export INCLUDE := $(foreach dir,$(INCLUDES),-I$(TOPDIR)/$(dir)) \
@@ -68,8 +61,6 @@ clean:
 
 else
 
-# We are now inside $(BUILD). OFILES is exported by the outer invocation;
-# do not recompute it from the current directory, because source/ is one level up.
 DEPENDS := $(OFILES:.o=.d)
 
 all: $(OUTPUT).nro
