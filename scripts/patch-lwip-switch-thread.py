@@ -6,10 +6,9 @@ if main_cpp.exists():
     text = main_cpp.read_text().replace('5000000000ULL', '3000000000ULL')
     main_cpp.write_text(text)
 
-# Keep the Switch thread-registry workaround, but do not try to infer the
-# failure from pthread_create(). Hardware already proves that pthread_create
-# succeeds. The useful boundary is what happens inside the driver/tcpip init.
-lwip_patched = False
+# Keep the Switch thread-registry workaround. Do not infer the failure from
+# pthread_create(): the child thread is demonstrably starting.
+lwip_path = None
 for path in Path('libzt').rglob('sys_arch.c'):
     try:
         text = path.read_text()
@@ -18,7 +17,7 @@ for path in Path('libzt').rglob('sys_arch.c'):
         continue
     if 'sys_thread_new' not in text or 'pthread_create' not in text:
         continue
-
+    lwip_path = path
     if 'switch_thread_count' not in text:
         sig_re = re.compile(
             r'static\s+struct\s+sys_thread\s*\*\s*\r?\n'
@@ -66,52 +65,60 @@ introduce_thread(pthread_t id)
         text = text[:m.start()] + new_intro + text[end:]
         path.write_text(text)
         print(f'Applied Switch thread registry workaround: {path}')
-    lwip_patched = True
     break
 
-if not lwip_patched:
+if lwip_path is None:
     raise SystemExit('ERROR: no usable lwIP Unix sys_arch.c was found under libzt')
 
-# Instrument the exact sys_thread_new() lifecycle. Each pthread_create marker
-# is deliberately inside sys_thread_new(), so a message from the tcpip thread
-# can be distinguished from the driver thread's own creation.
-for path in [lwip_patched and next(Path('libzt').rglob('sys_arch.c'))]:
-    text = path.read_text()
-    if 'SWITCH-DIAG] sys_thread_new: ENTER' not in text:
-        # Find the function body without assuming its exact formatting.
-        fn_re = re.compile(r'(sys_thread_new\s*\([^)]*\)\s*\{)')
-        m = fn_re.search(text)
-        if not m:
-            raise SystemExit(f'ERROR: sys_thread_new() signature not found in {path}')
-        text = text[:m.start()] + m.group(1) + '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] sys_thread_new: ENTER\\n");\n  consoleUpdate(NULL);\n#endif' + text[m.end():]
+# Reliable sys_thread_new lifecycle markers. Insert after the complete
+# pthread_create statement so multiline calls remain valid C.
+path = lwip_path
+text = path.read_text()
+if '[SWITCH-DIAG] sys_thread_new: ENTER' not in text:
+    fn_re = re.compile(r'(sys_thread_new\s*\([^)]*\)\s*\{)')
+    m = fn_re.search(text)
+    if not m:
+        raise SystemExit(f'ERROR: sys_thread_new() signature not found in {path}')
+    text = text[:m.end()] + '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] sys_thread_new: ENTER\\n");\n  consoleUpdate(NULL);\n#endif' + text[m.end():]
 
-    # Mark the complete pthread_create statement only after its terminating
-    # semicolon. This avoids corrupting multi-line calls.
-    if 'sys_thread_new: AFTER_PTHREAD_CREATE' not in text:
-        start = text.find('pthread_create(')
-        if start >= 0:
-            semi = text.find(';', start)
-            if semi < 0:
-                raise SystemExit(f'ERROR: pthread_create statement has no terminating semicolon in {path}')
-            insertion = '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] sys_thread_new: AFTER_PTHREAD_CREATE\\n");\n  consoleUpdate(NULL);\n#endif'
-            text = text[:semi+1] + insertion + text[semi+1:]
+if 'sys_thread_new: AFTER_PTHREAD_CREATE' not in text:
+    start = text.find('pthread_create(')
+    if start < 0:
+        raise SystemExit(f'ERROR: pthread_create() not found in {path}')
+    semi = text.find(';', start)
+    if semi < 0:
+        raise SystemExit(f'ERROR: pthread_create statement has no terminating semicolon in {path}')
+    insertion = '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] sys_thread_new: AFTER_PTHREAD_CREATE\\n");\n  consoleUpdate(NULL);\n#endif'
+    text = text[:semi + 1] + insertion + text[semi + 1:]
 
-    if 'sys_thread_new: BEFORE_INTRODUCE' not in text and 'introduce_thread(tmp)' in text:
-        text = text.replace(
-            'st = introduce_thread(tmp);',
-            '#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] sys_thread_new: BEFORE_INTRODUCE\\n");\n  consoleUpdate(NULL);\n#endif\n  st = introduce_thread(tmp);\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] sys_thread_new: AFTER_INTRODUCE\\n");\n  consoleUpdate(NULL);\n#endif',
-            1)
+if 'sys_thread_new: BEFORE_INTRODUCE' not in text:
+    marker_re = re.compile(r'([ \t]*)st\s*=\s*introduce_thread\s*\(\s*tmp\s*\)\s*;')
+    m = marker_re.search(text)
+    if m:
+        indent = m.group(1)
+        replacement = (
+            '#ifdef __SWITCH__\n' + indent + 'printf("[SWITCH-DIAG] sys_thread_new: BEFORE_INTRODUCE\\n");\n' +
+            indent + 'consoleUpdate(NULL);\n' + '#endif\n' +
+            m.group(0) + '\n' +
+            '#ifdef __SWITCH__\n' + indent + 'printf("[SWITCH-DIAG] sys_thread_new: AFTER_INTRODUCE\\n");\n' +
+            indent + 'consoleUpdate(NULL);\n' + '#endif'
+        )
+        text = text[:m.start()] + replacement + text[m.end():]
 
-    if 'sys_thread_new: RETURN' not in text and 'return st;' in text:
-        text = text.replace(
-            'return st;',
-            '#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] sys_thread_new: RETURN\\n");\n  consoleUpdate(NULL);\n#endif\n  return st;',
-            1)
-    path.write_text(text)
+if 'sys_thread_new: RETURN' not in text:
+    marker_re = re.compile(r'([ \t]*)return\s+st\s*;')
+    m = marker_re.search(text)
+    if m:
+        indent = m.group(1)
+        replacement = (
+            '#ifdef __SWITCH__\n' + indent + 'printf("[SWITCH-DIAG] sys_thread_new: RETURN\\n");\n' +
+            indent + 'consoleUpdate(NULL);\n' + '#endif\n' + m.group(0)
+        )
+        text = text[:m.start()] + replacement + text[m.end():]
+path.write_text(text)
 
-# Instrument the actual libzt driver thread. The critical discovery is that
-# "driver loop entered" can be followed by a pthread_create message emitted
-# by tcpip_init's child thread, so distinguish each stage explicitly.
+# Instrument the actual libzt driver thread. Match whitespace/indentation
+# robustly because upstream formatting can change between libzt revisions.
 vtap = None
 for candidate in Path('libzt').rglob('VirtualTap.cpp'):
     try:
@@ -130,21 +137,30 @@ if '[SWITCH-DIAG] driver: ENTER' not in text:
     m = fn_re.search(text)
     if not m:
         raise SystemExit(f'ERROR: zts_main_lwip_driver_loop() signature not found in {vtap}')
-    text = text[:m.start()] + m.group(1) + '\n#ifdef __SWITCH__\n    printf("[SWITCH-DIAG] driver: ENTER\\n");\n    consoleUpdate(NULL);\n#endif' + text[m.end():]
+    text = text[:m.end()] + '\n#ifdef __SWITCH__\n    printf("[SWITCH-DIAG] driver: ENTER\\n");\n    consoleUpdate(NULL);\n#endif' + text[m.end():]
 
-replacements = [
-    ('sys_sem_new(&sem, 0);',
-     '#ifdef __SWITCH__\n    printf("[SWITCH-DIAG] driver: BEFORE_SEM_NEW\\n");\n    consoleUpdate(NULL);\n#endif\n    sys_sem_new(&sem, 0);\n#ifdef __SWITCH__\n    printf("[SWITCH-DIAG] driver: AFTER_SEM_NEW\\n");\n    consoleUpdate(NULL);\n#endif'),
-    ('tcpip_init(zts_tcpip_init_done, &sem);',
-     '#ifdef __SWITCH__\n    printf("[SWITCH-DIAG] driver: BEFORE_TCPIP_INIT\\n");\n    consoleUpdate(NULL);\n#endif\n    tcpip_init(zts_tcpip_init_done, &sem);\n#ifdef __SWITCH__\n    printf("[SWITCH-DIAG] driver: AFTER_TCPIP_INIT\\n");\n    consoleUpdate(NULL);\n#endif'),
-    ('sys_sem_wait(&sem);',
-     '#ifdef __SWITCH__\n    printf("[SWITCH-DIAG] driver: BEFORE_SEM_WAIT\\n");\n    consoleUpdate(NULL);\n#endif\n    sys_sem_wait(&sem);\n#ifdef __SWITCH__\n    printf("[SWITCH-DIAG] driver: AFTER_SEM_WAIT\\n");\n    consoleUpdate(NULL);\n#endif')
-]
-for old, new in replacements:
-    if old not in text:
-        raise SystemExit(f'ERROR: expected driver statement not found in {vtap}: {old}')
-    if new.split('\\n')[0] not in text:
-        text = text.replace(old, new, 1)
+# Use regexes instead of exact strings. This handles tabs, spaces and line
+# wrapping while preserving the original statement itself.
+def instrument_statement(text, pattern, label):
+    if f'[SWITCH-DIAG] driver: {label}' in text:
+        return text
+    m = re.search(pattern, text)
+    if not m:
+        raise SystemExit(f'ERROR: expected driver statement not found in {vtap}: {label}')
+    indent = re.match(r'[ \t]*', m.group(0)).group(0)
+    statement = m.group(0)
+    marker = (
+        '#ifdef __SWITCH__\n' + indent + f'printf("[SWITCH-DIAG] driver: BEFORE_{label}\\n");\n' +
+        indent + 'consoleUpdate(NULL);\n' + '#endif\n' +
+        statement + '\n' +
+        '#ifdef __SWITCH__\n' + indent + f'printf("[SWITCH-DIAG] driver: AFTER_{label}\\n");\n' +
+        indent + 'consoleUpdate(NULL);\n' + '#endif'
+    )
+    return text[:m.start()] + marker + text[m.end():]
+
+text = instrument_statement(text, r'(?m)^[ \t]*sys_sem_new\s*\(\s*&\s*sem\s*,\s*0\s*\)\s*;', 'SEM_NEW')
+text = instrument_statement(text, r'(?m)^[ \t]*tcpip_init\s*\(\s*zts_tcpip_init_done\s*,\s*&\s*sem\s*\)\s*;', 'TCPIP_INIT')
+text = instrument_statement(text, r'(?m)^[ \t]*sys_sem_wait\s*\(\s*&\s*sem\s*\)\s*;', 'SEM_WAIT')
 
 vtap.write_text(text)
 print(f'Instrumented deep lwIP startup boundaries: {vtap}')
