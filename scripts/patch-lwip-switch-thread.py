@@ -118,39 +118,43 @@ introduce_thread(pthread_t id)
     # size happens to be. For a thread about to run the full lwIP + ZeroTier
     # driver loop, that default may not be big enough, causing a silent stack
     # overflow right after pthread_create() returns - which matches exactly
-    # where execution was observed to stop on real hardware. Explicitly
-    # request a generous stack instead of trusting the default.
-    old_create = '''  code = pthread_create(&tmp,
-                        NULL, 
-                        thread_wrapper, 
-                        thread_data);'''
-    new_create = '''#ifdef __SWITCH__
-  pthread_attr_t switch_attr;
-  pthread_attr_init(&switch_attr);
-  pthread_attr_setstacksize(&switch_attr, 256 * 1024);
-  code = pthread_create(&tmp,
-                        &switch_attr,
-                        thread_wrapper,
-                        thread_data);
-  pthread_attr_destroy(&switch_attr);
-#else
-  code = pthread_create(&tmp,
-                        NULL, 
-                        thread_wrapper, 
-                        thread_data);
-#endif'''
-    if old_create in text:
-        text = text.replace(old_create, new_create, 1)
+    # where execution was observed to stop on real hardware.
+    #
+    # This runs AFTER patch-libzt-switch-bootstrap.py, which already wraps this
+    # same pthread_create() call with [SWITCH-DIAG] printf statements and
+    # subtly changes its whitespace in the process. An exact-string match here
+    # (like the first version of this fix used) breaks against that. Match the
+    # call itself with a whitespace-tolerant regex instead, independent of
+    # whatever diagnostic printf lines surround it.
+    create_re = re.compile(
+        r'code\s*=\s*pthread_create\s*\(\s*&tmp\s*,\s*NULL\s*,\s*'
+        r'thread_wrapper\s*,\s*thread_data\s*\)\s*;'
+    )
+    cm = create_re.search(text)
+    if cm:
+        replacement = (
+            '#ifdef __SWITCH__\n'
+            '  pthread_attr_t switch_attr;\n'
+            '  pthread_attr_init(&switch_attr);\n'
+            '  pthread_attr_setstacksize(&switch_attr, 256 * 1024);\n'
+            '  code = pthread_create(&tmp, &switch_attr, thread_wrapper, thread_data);\n'
+            '  pthread_attr_destroy(&switch_attr);\n'
+            '#else\n'
+            '  code = pthread_create(&tmp, NULL, thread_wrapper, thread_data);\n'
+            '#endif'
+        )
+        text = text[:cm.start()] + replacement + text[cm.end():]
         path.write_text(text)
         print(f'Applied explicit 256KB stack size for Switch lwIP thread: {path}')
     elif 'pthread_attr_setstacksize(&switch_attr, 256 * 1024)' in text:
         print('Explicit stack-size fix already present, nothing to do.')
     else:
         raise SystemExit(
-            'ERROR: could not locate the pthread_create() call in sys_thread_new '
-            'to apply the explicit stack-size fix (exact-string match failed - '
-            'check for whitespace differences against the current source, same '
-            'class of bug as the introduce_thread() match failure earlier).'
+            'ERROR: could not locate the pthread_create(&tmp, NULL, thread_wrapper, '
+            'thread_data) call in sys_thread_new via regex either, even allowing for '
+            'surrounding diagnostic printf lines. The call itself may have been '
+            'restructured upstream or by another patch step - inspect the current '
+            'sys_arch.c content directly rather than guessing again.'
         )
     break
 
