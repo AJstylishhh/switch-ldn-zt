@@ -92,7 +92,7 @@ if '[SWITCH-DIAG] STN: ENTER' not in s:
 
 # Find pthread_create only inside sys_thread_new, not the first occurrence in
 # the entire file (the previous instrumentation made this ambiguous).
-pos = s.find('pthread_create(', fn_start)
+_pcm = re.search(r'pthread_create\s*\(\s*&tmp\s*,', s[fn_start:]); pos = (fn_start + _pcm.start()) if _pcm else -1
 if pos < 0:
     raise SystemExit('ERROR: pthread_create() not found inside sys_thread_new()')
 open_paren = s.find('(', pos)
@@ -111,6 +111,39 @@ if close_paren is None:
 semi = s.find(';', close_paren)
 if semi < 0:
     raise SystemExit('ERROR: pthread_create() has no terminator')
+
+# Re-apply the explicit 256KB stack size fix, as one clean replacement of the
+# WHOLE statement (including the "code = " assignment it sits inside - an
+# earlier attempt only replaced the pthread_create(...) call itself and left
+# the pre-existing "code = " dangling in front of the inserted #ifdef,
+# producing invalid "code = #ifdef __SWITCH__" text). This lwIP Unix port
+# ignores the caller-requested stack size (LWIP_UNUSED_ARG(stacksize)) and
+# creates the pthread with a NULL attr, i.e. whatever the toolchain default
+# happens to be. Verified on real hardware to be necessary: without it, the
+# newly created thread stalls immediately after pthread_create() returns
+# (proven by a probe at the very first line of thread_wrapper() never
+# printing).
+if '&switch_attr' not in s[pos:semi+1]:
+    stmt_start = s.rfind('\n', 0, pos) + 1  # start of the line containing "code = pthread_create("
+    original_stmt = s[stmt_start:semi+1]
+    stack_fix = (
+        '#ifdef __SWITCH__\n'
+        '  pthread_attr_t switch_attr;\n'
+        '  pthread_attr_init(&switch_attr);\n'
+        '  pthread_attr_setstacksize(&switch_attr, 256 * 1024);\n'
+        '  code = pthread_create(&tmp, &switch_attr, thread_wrapper, thread_data);\n'
+        '  pthread_attr_destroy(&switch_attr);\n'
+        '#else\n'
+        + original_stmt + '\n'
+        '#endif'
+    )
+    s = s[:stmt_start] + stack_fix + s[semi+1:]
+    m = re.search(r'(sys_thread_t\s+sys_thread_new\s*\([^;{}]*\)\s*\{)', s)
+    fn_start = m.end()
+    _pcm = re.search(r'pthread_create\s*\(\s*&tmp\s*,', s[fn_start:])
+    pos = (fn_start + _pcm.start()) if _pcm else -1
+    close_paren = s.find(')', s.find('(', pos))
+    semi = s.find(';', close_paren)
 
 if '[SWITCH-DIAG] STN: AFTER_PTHREAD_CREATE' not in s:
     s = s[:semi+1] + '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] STN: AFTER_PTHREAD_CREATE\\n");\n  consoleUpdate(NULL);\n#endif' + s[semi+1:]
@@ -243,3 +276,15 @@ if '[SWITCH-DIAG] TCPIP: AFTER_DONE' not in s:
 
 tcpip.write_text(s)
 print(f'Instrumented tcpip worker/init handshake: {tcpip}')
+# Re-apply the thread_wrapper entry probe. This was the probe that most
+# recently proved the child thread genuinely starts executing (its first
+# printf succeeded) before the freeze moved deeper into tcpip_init/tcpip_thread.
+# Keep it - it's still useful confirmation alongside the new deeper markers.
+if '[SWITCH-DIAG] thread_wrapper: child thread alive' not in sys_arch.read_text():
+    s2 = sys_arch.read_text()
+    wm = re.search(r'(thread_wrapper\s*\(\s*void\s*\*\s*arg\s*\)\s*\{)', s2)
+    if not wm:
+        raise SystemExit('ERROR: could not locate thread_wrapper() for child-thread probe')
+    s2 = s2[:wm.end()] + '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] thread_wrapper: child thread alive\\n");\n  consoleUpdate(NULL);\n#endif' + s2[wm.end():]
+    sys_arch.write_text(s2)
+    print(f'Re-added thread_wrapper child-thread-alive probe: {sys_arch}')
