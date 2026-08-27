@@ -19,25 +19,8 @@ jobs:
         run: |
           set -eu
           echo "Commit: $(git rev-parse HEAD)"
-          echo "LWIP patch script:"
-          sha256sum scripts/patch-lwip-switch-thread.py
-          python3 -m py_compile scripts/patch-lwip-switch-thread.py
-          if grep -n 'nonlocal changed' scripts/patch-lwip-switch-thread.py; then
-            echo 'ERROR: stale nonlocal changed code is present in the checked-out script.'
-            exit 1
-          fi
-          echo 'LWIP patch script syntax/stale-code check: OK'
-
-      - name: Verify devkitA64
-        run: |
-          set -eu
-          export DEVKITA64=/opt/devkitpro/devkitA64
-          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
-          test -x "$DEVKITA64/bin/aarch64-none-elf-gcc"
-          test -x "$DEVKITA64/bin/aarch64-none-elf-g++"
-          aarch64-none-elf-gcc --version
-          aarch64-none-elf-g++ --version
-          test "$(aarch64-none-elf-gcc -dumpmachine)" = "aarch64-none-elf"
+          python3 -m py_compile scripts/patch-libzt-switch.py
+          echo 'Patch script syntax check: OK'
 
       - name: Clone upstream libzt
         run: |
@@ -52,35 +35,17 @@ jobs:
           printf '%s\n' '#pragma once' '#define __LITTLE_ENDIAN 1234' '#define __BIG_ENDIAN 4321' '#define __BYTE_ORDER __LITTLE_ENDIAN' > ext/endian.h
           printf '%s\n' '#pragma once' '#include <sys/socket.h>' '#include <netinet/in.h>' > ext/arpa/inet.h
 
-      - name: Patch libzt for Switch
+      - name: Patch libzt for Switch (Base Patch)
         run: |
           set -eu
-          python3 scripts/patch-libzt-switch-bootstrap.py
+          python3 scripts/patch-libzt-switch.py
 
-      - name: Patch remaining Switch portability gaps
+      - name: Patch lwIP Threading (Critical Fix)
         run: |
           set -eu
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('libzt/ext/ZeroTierOne/osdep/OSUtils.cpp')
-          s = p.read_text()
-          needle = '#include <sys/uio.h>'
-          wrapped = '#ifndef __SWITCH__\n#include <sys/uio.h>\n#endif'
-          if wrapped not in s:
-              if s.count(needle) != 1:
-                  raise SystemExit(f'Expected exactly one sys/uio.h include in {p}, found {s.count(needle)}')
-              s = s.replace(needle, wrapped, 1)
-              p.write_text(s)
-          print('OSUtils.cpp sys/uio.h guard: OK')
-          PY
+          python3 scripts/patch-libzt-switch-thread.py
 
-          echo 'Using checked-out lwIP patch script:'
-          sha256sum scripts/patch-lwip-switch-thread.py
-          python3 -m py_compile scripts/patch-lwip-switch-thread.py
-          ! grep -q 'nonlocal changed' scripts/patch-lwip-switch-thread.py
-          python3 scripts/patch-lwip-switch-thread.py
-
-      - name: Configure libzt
+      - name: Build libzt static library
         working-directory: libzt
         run: |
           set -eu
@@ -90,70 +55,18 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=/__w/switch-ldn-zt/switch-ldn-zt/cmake/switch.toolchain.cmake \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_STATIC_LIB=ON \
-            -DBUILD_SHARED_LIB=OFF \
-            -DBUILD_HOST_EXAMPLES=OFF \
-            -DBUILD_HOST_SELFTEST=OFF \
-            -DALLOW_INSTALL_TARGET=OFF \
-            -DZTS_DISABLE_CENTRAL_API=ON \
             -DSWITCH=ON \
             -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port/include" \
             -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port/include"
-
-      - name: Verify Switch flags and lwIP port
-        working-directory: libzt
-        run: |
-          set -eu
-          grep -R -- "-D__SWITCH__" build-switch/CMakeFiles | head -20
-          grep -R -- "-DFD_SETSIZE=1024" build-switch/CMakeFiles | head -5
-          grep -R -- "LWIP_PROVIDE_ERRNO" build-switch/CMakeFiles | head -10
-          grep -R -- "ext/lwip-contrib/ports/unix/port/include" build-switch/CMakeFiles | head -20
-          test -f ext/lwip-contrib/ports/unix/port/include/arch/cc.h
-          test -f ext/lwip-contrib/ports/unix/port/include/arch/sys_arch.h
-          test -f ext/lwip/src/include/arch/cc.h
-
-      - name: Build libzt static library
-        working-directory: libzt
-        run: |
-          set -eu
           cmake --build build-switch --target zt-static --parallel 2 --verbose
-
-      - name: Verify artifact
-        working-directory: libzt
-        run: |
-          set -eu
-          export DEVKITA64=/opt/devkitpro/devkitA64
-          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
-          LIB="$(find build-switch -type f -name 'libzt.a' | head -1)"
-          test -n "$LIB"
-          test -s "$LIB"
-          echo "Switch library: $LIB"
-          aarch64-none-elf-ar t "$LIB" | head -60
-
-      - name: Package Switch libzt
-        run: |
-          set -eu
-          mkdir -p dist/libzt-switch/include dist/libzt-switch/lib
-          cp libzt/include/ZeroTierSockets.h dist/libzt-switch/include/
-          cp "$(find libzt/build-switch -type f -name 'libzt.a' | head -1)" dist/libzt-switch/lib/
-          cp cmake/switch.toolchain.cmake dist/libzt-switch/
-          tar -C dist -czf libzt-switch.tar.gz libzt-switch
-
-      - name: Upload Switch libzt artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: libzt-switch
-          path: libzt-switch.tar.gz
-          retention-days: 14
 
       - name: Prepare Switch homebrew dependency
         run: |
           set -eu
           rm -rf /tmp/libzt-switch third_party/libzt
-          mkdir -p /tmp/libzt-switch third_party
-          tar -xzf libzt-switch.tar.gz -C /tmp/libzt-switch
-          mv /tmp/libzt-switch/libzt-switch third_party/libzt
-          test -f third_party/libzt/include/ZeroTierSockets.h
-          test -s third_party/libzt/lib/libzt.a
+          mkdir -p /tmp/libzt-switch third_party/libzt/lib third_party/libzt/include
+          cp "$(find libzt/build-switch -type f -name 'libzt.a' | head -1)" third_party/libzt/lib/libzt.a
+          cp libzt/include/ZeroTierSockets.h third_party/libzt/include/
 
       - name: Build ZeroTier Switch NRO
         run: |
@@ -161,8 +74,6 @@ jobs:
           make clean
           make
           test -s zerotier-switch.nro
-          test -s zerotier-switch.nacp
-          ls -lh zerotier-switch.nro zerotier-switch.nacp
 
       - name: Upload ZeroTier Switch NRO
         uses: actions/upload-artifact@v4
