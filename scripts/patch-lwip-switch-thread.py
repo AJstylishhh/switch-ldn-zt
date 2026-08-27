@@ -165,3 +165,42 @@ if not patched:
         'the ORIGINAL malloc+mutex thread registration code, not the fix. '
         'Failing the build here on purpose so this cannot go unnoticed again.'
     )
+
+# Third probe: add a print as the literal first instruction the newly spawned
+# thread executes, before it calls into the real driver function. Since
+# "pthread_create returned code=0" already prints successfully (proving the
+# parent thread continues past pthread_create itself), the stall is happening
+# somewhere after that - either later in the parent's own bookkeeping, or
+# inside the brand-new child thread once it starts running. This tells us
+# which one, directly, instead of guessing further.
+for path in Path('libzt').rglob('sys_arch.c'):
+    try:
+        text = path.read_text()
+    except Exception:
+        continue
+    if 'thread_wrapper(void *arg)' not in text:
+        continue
+    if '[SWITCH-DIAG] thread_wrapper: child thread alive' in text:
+        print('Child-thread-start probe already present, nothing to do.')
+        break
+
+    wrapper_re = re.compile(
+        r'(thread_wrapper\s*\(\s*void\s*\*\s*arg\s*\)\s*\r?\n\s*\{)'
+    )
+    wm = wrapper_re.search(text)
+    if not wm:
+        raise SystemExit(
+            'ERROR: could not locate thread_wrapper() to add the child-thread-start probe.'
+        )
+
+    insert_at = wm.end()
+    probe = (
+        '\n#ifdef __SWITCH__\n'
+        '  printf("[SWITCH-DIAG] thread_wrapper: child thread alive\\n");\n'
+        '  consoleUpdate(NULL);\n'
+        '#endif'
+    )
+    text = text[:insert_at] + probe + text[insert_at:]
+    path.write_text(text)
+    print(f'Added child-thread-start probe: {path}')
+    break
