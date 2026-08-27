@@ -288,3 +288,102 @@ if '[SWITCH-DIAG] thread_wrapper: child thread alive' not in sys_arch.read_text(
     s2 = s2[:wm.end()] + '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] thread_wrapper: child thread alive\\n");\n  consoleUpdate(NULL);\n#endif' + s2[wm.end():]
     sys_arch.write_text(s2)
     print(f'Re-added thread_wrapper child-thread-alive probe: {sys_arch}')
+
+# ---------------------------------------------------------------------------
+# Guard ALL diagnostic console output with a shared spinlock.
+#
+# The last hardware test showed a suspicious gap: the plain "pthread_create
+# returned code=%d" print (from the very first bootstrap patch) never
+# appeared on screen at all, even though the lines right before and after it
+# did. That's consistent with two threads calling printf()/consoleUpdate()
+# concurrently and corrupting/losing each other's output - devkitPro's
+# console library is very unlikely to be thread-safe. This may not just be
+# cosmetic corruption; if it's also the actual hang, serializing all
+# diagnostic output should both fix the missing-line symptom AND let
+# execution continue past this point if that was the real blocker.
+#
+# Uses a simple GCC builtin spinlock (same __sync_* builtins already used for
+# the Switch thread registry) rather than a pthread_mutex_t, so it needs no
+# extra init call and works identically whether reached from C or C++.
+# ---------------------------------------------------------------------------
+
+DIAG_LOCK_DEFINE_C = '''#ifdef __SWITCH__
+volatile int __switch_diag_lock = 0;
+#endif
+'''
+
+DIAG_LOCK_DEFINE_CPP = '''#ifdef __SWITCH__
+extern "C" {
+volatile int __switch_diag_lock = 0;
+}
+#endif
+'''
+
+DIAG_LOCK_EXTERN_C = '''#ifdef __SWITCH__
+extern "C" { extern volatile int __switch_diag_lock; }
+#endif
+'''
+
+DIAG_LOCK_EXTERN_PLAIN = '''#ifdef __SWITCH__
+extern volatile int __switch_diag_lock;
+#endif
+'''
+
+DIAG_PRINT_HELPER = '''#ifdef __SWITCH__
+static inline void switch_diag_print(const char *msg) {
+  while (__sync_lock_test_and_set(&__switch_diag_lock, 1)) { }
+  printf("%s", msg);
+  consoleUpdate(NULL);
+  __sync_lock_release(&__switch_diag_lock);
+}
+#endif
+'''
+
+# Two shapes of existing diagnostic call: plain string, and the one with a
+# %d format argument (the pthread_create return code print).
+plain_pair_re = re.compile(
+    r'printf\(\s*("(?:[^"\\]|\\.)*\\n")\s*\)\s*;\s*\n\s*consoleUpdate\(NULL\)\s*;'
+)
+ternary_pair_re = re.compile(
+    r'printf\(\s*("(?:[^"\\]|\\.)*\\n")\s*,\s*([^;]+?)\s*\)\s*;\s*\n\s*consoleUpdate\(NULL\)\s*;'
+)
+
+targets = [
+    ('libzt', 'sys_arch.c', True),   # (dir, filename, is_first_file_that_defines_the_lock)
+    ('libzt', 'VirtualTap.cpp', False),
+    ('libzt', 'tcpip.c', False),
+]
+first_done = False
+for root, fname, _ in targets:
+    for path in Path(root).rglob(fname):
+        try:
+            text = path.read_text()
+        except Exception:
+            continue
+        if '__switch_diag_lock' in text or 'switch_diag_print' in text:
+            continue  # already patched
+        if '[SWITCH-DIAG]' not in text:
+            continue  # this particular file copy has no diagnostics to guard
+
+        # Serialize any printf(...) + consoleUpdate(NULL) pair, whether it
+        # takes a plain string or one extra argument (a variable or a ternary
+        # expression), into a small snprintf + shared print, since the helper
+        # only takes a plain string.
+        def fmt_repl(m):
+            return (
+                '{ char __sdbuf[96]; snprintf(__sdbuf, sizeof(__sdbuf), '
+                + m.group(1) + ', ' + m.group(2) + '); switch_diag_print(__sdbuf); }'
+            )
+        text = ternary_pair_re.sub(fmt_repl, text)
+        text = plain_pair_re.sub(lambda m: f'switch_diag_print({m.group(1)});', text)
+
+        is_cpp = fname.endswith('.cpp')
+        if not first_done:
+            text = (DIAG_LOCK_DEFINE_CPP if is_cpp else DIAG_LOCK_DEFINE_C) + DIAG_PRINT_HELPER + text
+            first_done = True
+        else:
+            extern_block = DIAG_LOCK_EXTERN_C if is_cpp else DIAG_LOCK_EXTERN_PLAIN
+            text = extern_block + DIAG_PRINT_HELPER + text
+
+        path.write_text(text)
+        print(f'Serialized diagnostic console output in: {path}')
