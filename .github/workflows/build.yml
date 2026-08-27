@@ -42,7 +42,18 @@ jobs:
       - name: Clone upstream libzt
         run: |
           set -eu
-          git clone --depth 1 --recurse-submodules https://github.com/zerotier/libzt.git
+
+          # The runner workspace may already contain a libzt directory.
+          # Remove it so git clone always starts from a clean destination.
+          rm -rf libzt
+
+          git clone --depth 1 --recurse-submodules \
+            https://github.com/zerotier/libzt.git \
+            libzt
+
+          test -d libzt
+          test -f libzt/CMakeLists.txt
+          echo "libzt checkout: OK"
 
       - name: Prepare Switch compatibility headers
         working-directory: libzt
@@ -60,17 +71,26 @@ jobs:
       - name: Patch remaining Switch portability gaps
         run: |
           set -eu
+
           python3 - <<'PY'
           from pathlib import Path
+
           p = Path('libzt/ext/ZeroTierOne/osdep/OSUtils.cpp')
           s = p.read_text()
+
           needle = '#include <sys/uio.h>'
           wrapped = '#ifndef __SWITCH__\n#include <sys/uio.h>\n#endif'
+
           if wrapped not in s:
               if s.count(needle) != 1:
-                  raise SystemExit(f'Expected exactly one sys/uio.h include in {p}, found {s.count(needle)}')
+                  raise SystemExit(
+                      f'Expected exactly one sys/uio.h include in {p}, '
+                      f'found {s.count(needle)}'
+                  )
+
               s = s.replace(needle, wrapped, 1)
               p.write_text(s)
+
           print('OSUtils.cpp sys/uio.h guard: OK')
           PY
 
@@ -86,6 +106,7 @@ jobs:
           set -eu
           export DEVKITA64=/opt/devkitpro/devkitA64
           export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
+
           cmake -S . -B build-switch \
             -DCMAKE_TOOLCHAIN_FILE=/__w/switch-ldn-zt/switch-ldn-zt/cmake/switch.toolchain.cmake \
             -DCMAKE_BUILD_TYPE=Release \
@@ -107,6 +128,7 @@ jobs:
           grep -R -- "-DFD_SETSIZE=1024" build-switch/CMakeFiles | head -5
           grep -R -- "LWIP_PROVIDE_ERRNO" build-switch/CMakeFiles | head -10
           grep -R -- "ext/lwip-contrib/ports/unix/port/include" build-switch/CMakeFiles | head -20
+
           test -f ext/lwip-contrib/ports/unix/port/include/arch/cc.h
           test -f ext/lwip-contrib/ports/unix/port/include/arch/sys_arch.h
           test -f ext/lwip/src/include/arch/cc.h
@@ -123,19 +145,30 @@ jobs:
           set -eu
           export DEVKITA64=/opt/devkitpro/devkitA64
           export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
+
           LIB="$(find build-switch -type f -name 'libzt.a' | head -1)"
+
           test -n "$LIB"
           test -s "$LIB"
+
           echo "Switch library: $LIB"
           aarch64-none-elf-ar t "$LIB" | head -60
 
       - name: Package Switch libzt
         run: |
           set -eu
+
           mkdir -p dist/libzt-switch/include dist/libzt-switch/lib
-          cp libzt/include/ZeroTierSockets.h dist/libzt-switch/include/
-          cp "$(find libzt/build-switch -type f -name 'libzt.a' | head -1)" dist/libzt-switch/lib/
-          cp cmake/switch.toolchain.cmake dist/libzt-switch/
+
+          cp libzt/include/ZeroTierSockets.h \
+            dist/libzt-switch/include/
+
+          cp "$(find libzt/build-switch -type f -name 'libzt.a' | head -1)" \
+            dist/libzt-switch/lib/
+
+          cp cmake/switch.toolchain.cmake \
+            dist/libzt-switch/
+
           tar -C dist -czf libzt-switch.tar.gz libzt-switch
 
       - name: Upload Switch libzt artifact
@@ -148,20 +181,28 @@ jobs:
       - name: Prepare Switch homebrew dependency
         run: |
           set -eu
+
           rm -rf /tmp/libzt-switch third_party/libzt
+
           mkdir -p /tmp/libzt-switch third_party
+
           tar -xzf libzt-switch.tar.gz -C /tmp/libzt-switch
+
           mv /tmp/libzt-switch/libzt-switch third_party/libzt
+
           test -f third_party/libzt/include/ZeroTierSockets.h
           test -s third_party/libzt/lib/libzt.a
 
       - name: Build ZeroTier Switch NRO
         run: |
           set -eu
+
           make clean
           make
+
           test -s zerotier-switch.nro
           test -s zerotier-switch.nacp
+
           ls -lh zerotier-switch.nro zerotier-switch.nacp
 
       - name: Upload ZeroTier Switch NRO
