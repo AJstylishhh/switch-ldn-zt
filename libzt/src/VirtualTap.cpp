@@ -1,12 +1,3 @@
-#include <stdio.h>
-#ifdef __SWITCH__
-#include <switch.h>
-#endif
-
-#ifdef __SWITCH__
-static void switch_diag_print(const char *msg) {
-    printf("%s", msg);
-    consoleUpdate(NULL);
-}
-#endif
-
+// This repository does not carry the upstream libzt VirtualTap.cpp source.
+// The CI fetches/upstreams libzt and scripts/patch-lwip-switch-thread.py patches
+// the checked-out upstream file in the build workspace. Do not compile this stub.
