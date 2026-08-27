@@ -1,41 +1,51 @@
 from pathlib import Path
 import re
 
+# Keep the existing diagnostic timing without changing anything else in the app.
 main_cpp = Path('source/main.cpp')
 if main_cpp.exists():
-    text = main_cpp.read_text().replace('5000000000ULL', '3000000000ULL')
-    main_cpp.write_text(text)
+    s = main_cpp.read_text()
+    s = s.replace('5000000000ULL', '3000000000ULL')
+    main_cpp.write_text(s)
 
-lwip_path = None
-for path in Path('libzt').rglob('sys_arch.c'):
-    try:
-        text = path.read_text()
-    except Exception:
-        continue
-    if 'sys_thread_new' in text and 'pthread_create' in text:
-        lwip_path = path
-        break
-if lwip_path is None:
-    raise SystemExit('ERROR: no usable lwIP Unix sys_arch.c was found under libzt')
 
-text = lwip_path.read_text()
-if 'switch_thread_count' not in text:
-    sig = re.search(r'static\s+struct\s+sys_thread\s*\*\s*introduce_thread\s*\(\s*pthread_t\s+id\s*\)\s*\{', text)
-    if not sig:
-        raise SystemExit(f'ERROR: introduce_thread() not found in {lwip_path}')
-    brace = text.find('{', sig.start())
-    depth = 0
-    end = None
-    for i in range(brace, len(text)):
-        if text[i] == '{': depth += 1
-        elif text[i] == '}':
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-    if end is None:
-        raise SystemExit(f'ERROR: could not parse introduce_thread() in {lwip_path}')
-    new_intro = '''static struct sys_thread *
+def find_file(root, name, required=()):
+    for p in Path(root).rglob(name):
+        try:
+            s = p.read_text()
+        except Exception:
+            continue
+        if all(x in s for x in required):
+            return p
+    raise SystemExit(f'ERROR: could not find {name} containing {required}')
+
+# ---------------------------------------------------------------------------
+# lwIP Unix sys_arch: Switch must not enter the Unix thread registry mutex.
+# Also instrument the exact sys_thread_new handoff so the runtime trace tells
+# us whether the child or the parent is the one that stops progressing.
+# ---------------------------------------------------------------------------
+sys_arch = find_file('libzt', 'sys_arch.c', ('sys_thread_new', 'pthread_create'))
+s = sys_arch.read_text()
+
+sig = re.search(r'static\s+struct\s+sys_thread\s*\*\s*introduce_thread\s*\(\s*pthread_t\s+id\s*\)\s*\{', s)
+if not sig:
+    raise SystemExit(f'ERROR: introduce_thread() not found in {sys_arch}')
+
+# Replace the whole helper, avoiding malloc and threads_mutex on Switch.
+brace = s.find('{', sig.start())
+depth = 0
+end = None
+for i in range(brace, len(s)):
+    if s[i] == '{': depth += 1
+    elif s[i] == '}':
+        depth -= 1
+        if depth == 0:
+            end = i + 1
+            break
+if end is None:
+    raise SystemExit('ERROR: could not parse introduce_thread()')
+
+intro = r'''static struct sys_thread *
 introduce_thread(pthread_t id)
 {
 #ifdef __SWITCH__
@@ -59,188 +69,177 @@ introduce_thread(pthread_t id)
   return thread;
 #endif
 }'''
-    text = text[:sig.start()] + new_intro + text[end:]
+s = s[:sig.start()] + intro + s[end:]
 
-text = lwip_path.read_text()
-if '[SWITCH-DIAG] sys_thread_new: ENTER' not in text:
-    m = re.search(r'(sys_thread_new\s*\([^)]*\)\s*\{)', text)
-    if not m:
-        raise SystemExit(f'ERROR: sys_thread_new() signature not found in {lwip_path}')
-    text = text[:m.end()] + '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] sys_thread_new: ENTER\\n");\n  consoleUpdate(NULL);\n#endif' + text[m.end():]
+# Add Switch console declarations if the file does not already have them.
+if '#include <switch.h>' not in s:
+    marker = '#include <pthread.h>'
+    if marker in s:
+        s = s.replace(marker, marker + '\n#ifdef __SWITCH__\n#include <stdio.h>\n#include <switch.h>\n#endif', 1)
 
-if 'sys_thread_new: AFTER_PTHREAD_CREATE' not in text:
-    start = text.find('pthread_create(')
-    if start < 0:
-        raise SystemExit(f'ERROR: pthread_create() not found in {lwip_path}')
-    depth = 0
-    semi = None
-    for i in range(start, len(text)):
-        ch = text[i]
-        if ch == '(':
-            depth += 1
-        elif ch == ')':
-            depth -= 1
-        elif ch == ';' and depth == 0:
-            semi = i
+# Locate the actual sys_thread_new definition and its body.
+m = re.search(r'(sys_thread_t\s+sys_thread_new\s*\([^;{}]*\)\s*\{)', s)
+if not m:
+    raise SystemExit('ERROR: sys_thread_new() definition not found')
+fn_start = m.end()
+
+# Entry marker.
+if '[SWITCH-DIAG] STN: ENTER' not in s:
+    s = s[:fn_start] + '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] STN: ENTER\\n");\n  consoleUpdate(NULL);\n#endif' + s[fn_start:]
+    # Re-find function after insertion.
+    m = re.search(r'(sys_thread_t\s+sys_thread_new\s*\([^;{}]*\)\s*\{)', s)
+    fn_start = m.end()
+
+# Find pthread_create only inside sys_thread_new, not the first occurrence in
+# the entire file (the previous instrumentation made this ambiguous).
+pos = s.find('pthread_create(', fn_start)
+if pos < 0:
+    raise SystemExit('ERROR: pthread_create() not found inside sys_thread_new()')
+open_paren = s.find('(', pos)
+d = 0
+close_paren = None
+for i in range(open_paren, len(s)):
+    if s[i] == '(':
+        d += 1
+    elif s[i] == ')':
+        d -= 1
+        if d == 0:
+            close_paren = i
             break
-    if semi is None:
-        raise SystemExit(f'ERROR: pthread_create statement has no terminator in {lwip_path}')
-    text = text[:semi+1] + '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] sys_thread_new: AFTER_PTHREAD_CREATE\\n");\n  consoleUpdate(NULL);\n#endif' + text[semi+1:]
+if close_paren is None:
+    raise SystemExit('ERROR: unmatched pthread_create() in sys_thread_new()')
+semi = s.find(';', close_paren)
+if semi < 0:
+    raise SystemExit('ERROR: pthread_create() has no terminator')
 
-lwip_path.write_text(text)
+if '[SWITCH-DIAG] STN: AFTER_PTHREAD_CREATE' not in s:
+    s = s[:semi+1] + '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] STN: AFTER_PTHREAD_CREATE\\n");\n  consoleUpdate(NULL);\n#endif' + s[semi+1:]
 
-vtap = None
-for candidate in Path('libzt').rglob('VirtualTap.cpp'):
-    try:
-        candidate_text = candidate.read_text()
-    except Exception:
-        continue
-    if 'zts_main_lwip_driver_loop' in candidate_text:
-        vtap = candidate
-        break
-if vtap is None:
-    raise SystemExit('ERROR: VirtualTap.cpp with zts_main_lwip_driver_loop() was not found')
+# Instrument the exact introduce_thread call/return. This is the critical
+# boundary after pthread_create returns 0.
+if '[SWITCH-DIAG] STN: BEFORE_INTRODUCE' not in s:
+    # Find the if (0 == code) block after the pthread_create call.
+    p = s.find('if (0 == code)', pos)
+    if p < 0:
+        raise SystemExit('ERROR: expected if (0 == code) block not found')
+    call = s.find('st = introduce_thread(', p)
+    if call < 0:
+        raise SystemExit('ERROR: introduce_thread() call not found')
+    s = s[:call] + '#ifdef __SWITCH__\n    printf("[SWITCH-DIAG] STN: BEFORE_INTRODUCE\\n");\n    consoleUpdate(NULL);\n#endif\n    ' + s[call:]
+    # Re-find the call after insertion.
+    call = s.find('st = introduce_thread(', p)
+    close = s.find(');', call)
+    if close < 0:
+        raise SystemExit('ERROR: introduce_thread() call terminator not found')
+    close += 2
+    s = s[:close] + '\n#ifdef __SWITCH__\n    printf("[SWITCH-DIAG] STN: AFTER_INTRODUCE\\n");\n    consoleUpdate(NULL);\n#endif' + s[close:]
 
-text = vtap.read_text()
-if '[SWITCH-DIAG] driver: ENTER' not in text:
-    m = re.search(r'(zts_main_lwip_driver_loop\s*\([^)]*\)\s*\{)', text)
-    if not m:
-        raise SystemExit(f'ERROR: zts_main_lwip_driver_loop() signature not found in {vtap}')
-    text = text[:m.end()] + '\n#ifdef __SWITCH__\n    printf("[SWITCH-DIAG] driver: ENTER\\n");\n    consoleUpdate(NULL);\n#endif' + text[m.end():]
+# Instrument the helper itself so a failure inside the Switch replacement is
+# distinguishable from a failure returning to sys_thread_new.
+if '[SWITCH-DIAG] INTRO: ENTER' not in s:
+    marker = 'introduce_thread(pthread_t id)\n{'
+    if marker not in s:
+        raise SystemExit('ERROR: rewritten introduce_thread() marker not found')
+    s = s.replace(marker, marker + '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] INTRO: ENTER\\n");\n  consoleUpdate(NULL);\n#endif', 1)
+    target = 'switch_threads[slot].pthread = id;'
+    s = s.replace(target, target + '\n  printf("[SWITCH-DIAG] INTRO: SLOT_OK\\n");\n  consoleUpdate(NULL);', 1)
 
-def wrap_call(text, function_name, label):
-    if f'[SWITCH-DIAG] driver: BEFORE_{label}' in text:
-        return text
-    fn = text.find('zts_main_lwip_driver_loop')
-    pos = text.find(function_name, fn)
+sys_arch.write_text(s)
+print(f'Instrumented exact Switch sys_thread_new handoff: {sys_arch}')
+
+# ---------------------------------------------------------------------------
+# VirtualTap: bracket the three actual calls in the driver thread.
+# ---------------------------------------------------------------------------
+vtap = find_file('libzt', 'VirtualTap.cpp', ('zts_main_lwip_driver_loop',))
+s = vtap.read_text()
+
+m = re.search(r'(zts_main_lwip_driver_loop\s*\([^)]*\)\s*\{)', s)
+if not m:
+    raise SystemExit('ERROR: zts_main_lwip_driver_loop() definition not found')
+if '[SWITCH-DIAG] DRIVER: ENTER' not in s:
+    s = s[:m.end()] + '\n#ifdef __SWITCH__\n    printf("[SWITCH-DIAG] DRIVER: ENTER\\n");\n    consoleUpdate(NULL);\n#endif' + s[m.end():]
+
+
+def wrap_first_call(src, fn_name, label):
+    token = f'[SWITCH-DIAG] DRIVER: BEFORE_{label}'
+    if token in src:
+        return src
+    start = src.find('zts_main_lwip_driver_loop')
+    pos = src.find(fn_name, start)
     if pos < 0:
-        print(f'WARNING: {function_name} not found in driver; skipping {label}')
-        return text
-    open_paren = text.find('(', pos)
-    if open_paren < 0:
-        print(f'WARNING: malformed {function_name}; skipping {label}')
-        return text
+        raise SystemExit(f'ERROR: {fn_name} not found in driver')
+    op = src.find('(', pos)
     depth = 0
-    close_paren = None
-    for i in range(open_paren, len(text)):
-        ch = text[i]
-        if ch == '(':
+    cp = None
+    for i in range(op, len(src)):
+        if src[i] == '(':
             depth += 1
-        elif ch == ')':
+        elif src[i] == ')':
             depth -= 1
             if depth == 0:
-                close_paren = i
+                cp = i
                 break
-    if close_paren is None:
-        print(f'WARNING: unmatched {function_name}; skipping {label}')
-        return text
-    semi = text.find(';', close_paren)
+    if cp is None:
+        raise SystemExit(f'ERROR: unmatched {fn_name}()')
+    semi = src.find(';', cp)
     if semi < 0:
-        print(f'WARNING: no terminator after {function_name}; skipping {label}')
-        return text
-    line_start = text.rfind('\n', 0, pos) + 1
-    indent = re.match(r'[ \t]*', text[line_start:pos]).group(0)
-    statement = text[line_start:semi+1]
-    marker = (
-        '#ifdef __SWITCH__\n' + indent + f'printf("[SWITCH-DIAG] driver: BEFORE_{label}\\n");\n' +
-        indent + 'consoleUpdate(NULL);\n' + '#endif\n' +
-        statement + '\n' +
-        '#ifdef __SWITCH__\n' + indent + f'printf("[SWITCH-DIAG] driver: AFTER_{label}\\n");\n' +
-        indent + 'consoleUpdate(NULL);\n' + '#endif'
-    )
-    return text[:line_start] + marker + text[semi+1:]
+        raise SystemExit(f'ERROR: no terminator after {fn_name}()')
+    ls = src.rfind('\n', 0, pos) + 1
+    indent = re.match(r'[ \t]*', src[ls:pos]).group(0)
+    stmt = src[ls:semi+1]
+    repl = ('#ifdef __SWITCH__\n' + indent + f'printf("[SWITCH-DIAG] DRIVER: BEFORE_{label}\\n");\n' +
+            indent + 'consoleUpdate(NULL);\n#endif\n' + stmt + '\n' +
+            '#ifdef __SWITCH__\n' + indent + f'printf("[SWITCH-DIAG] DRIVER: AFTER_{label}\\n");\n' +
+            indent + 'consoleUpdate(NULL);\n#endif')
+    return src[:ls] + repl + src[semi+1:]
 
-text = wrap_call(text, 'sys_sem_new', 'SEM_NEW')
-text = wrap_call(text, 'tcpip_init', 'TCPIP_INIT')
-text = wrap_call(text, 'sys_sem_wait', 'SEM_WAIT')
-vtap.write_text(text)
-print(f'Instrumented deep lwIP startup boundaries: {vtap}')
+s = wrap_first_call(s, 'sys_sem_new', 'SEM_NEW')
+s = wrap_first_call(s, 'tcpip_init', 'TCPIP_INIT')
+s = wrap_first_call(s, 'sys_sem_wait', 'SEM_WAIT')
+vtap.write_text(s)
+print(f'Instrumented driver startup boundaries: {vtap}')
 
-# Trace the actual lwIP TCP/IP worker and its initialization handshake.
-tcpip_path = None
-for candidate in Path('libzt').rglob('tcpip.c'):
-    try:
-        candidate_text = candidate.read_text()
-    except Exception:
-        continue
-    if 'tcpip_thread' in candidate_text and 'tcpip_init' in candidate_text and 'sys_thread_new' in candidate_text:
-        tcpip_path = candidate
-        break
-if tcpip_path is None:
-    raise SystemExit('ERROR: lwIP tcpip.c with tcpip_thread/tcpip_init/sys_thread_new was not found')
+# ---------------------------------------------------------------------------
+# tcpip.c: trace the worker itself and the init callback.
+# ---------------------------------------------------------------------------
+tcpip = find_file('libzt', 'tcpip.c', ('tcpip_thread', 'tcpip_init', 'sys_thread_new'))
+s = tcpip.read_text()
 
-text = tcpip_path.read_text()
-if '[SWITCH-DIAG] tcpip_thread: ENTER' not in text:
-    m = re.search(r'((?:static\s+)?(?:void)\s+tcpip_thread\s*\([^;{}]*\)\s*\{)', text)
-    if not m:
-        raise SystemExit(f'ERROR: tcpip_thread() definition not found in {tcpip_path}')
-    text = text[:m.end()] + '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] tcpip_thread: ENTER\\n");\n  consoleUpdate(NULL);\n#endif' + text[m.end():]
+if '#include <switch.h>' not in s:
+    # Put Switch declarations after the normal includes. The source already
+    # includes lwip headers, so this is safe for the Switch-only diagnostics.
+    first = '#include "lwip/opt.h"'
+    if first in s:
+        s = s.replace(first, first + '\n#ifdef __SWITCH__\n#include <stdio.h>\n#include <switch.h>\n#endif', 1)
 
-if '[SWITCH-DIAG] tcpip_init: ENTER' not in text:
-    m = re.search(r'((?:static\s+)?(?:void)\s+tcpip_init\s*\([^;{}]*\)\s*\{)', text)
-    if not m:
-        raise SystemExit(f'ERROR: tcpip_init() definition not found in {tcpip_path}')
-    text = text[:m.end()] + '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] tcpip_init: ENTER\\n");\n  consoleUpdate(NULL);\n#endif' + text[m.end():]
+m = re.search(r'((?:static\s+)?void\s+tcpip_thread\s*\([^;{}]*\)\s*\{)', s)
+if not m:
+    raise SystemExit(f'ERROR: tcpip_thread() definition not found in {tcpip}')
+if '[SWITCH-DIAG] TCPIP: THREAD_ENTER' not in s:
+    s = s[:m.end()] + '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] TCPIP: THREAD_ENTER\\n");\n  consoleUpdate(NULL);\n#endif' + s[m.end():]
 
-# tcpip_thread() calls the init-done callback immediately after locking the core.
-if '[SWITCH-DIAG] tcpip_thread: BEFORE_INIT_DONE' not in text:
-    thread_start = text.find('tcpip_thread(')
-    pos = text.find('if (tcpip_init_done != NULL)', thread_start)
-    if pos < 0:
-        raise SystemExit('ERROR: tcpip_init_done block not found in tcpip_thread()')
-    injection = '#ifdef __SWITCH__\n    printf("[SWITCH-DIAG] tcpip_thread: BEFORE_INIT_DONE\\n");\n    consoleUpdate(NULL);\n#endif\n    '
-    text = text[:pos] + injection + text[pos:]
+m = re.search(r'((?:static\s+)?void\s+tcpip_init\s*\([^;{}]*\)\s*\{)', s)
+if not m:
+    raise SystemExit(f'ERROR: tcpip_init() definition not found in {tcpip}')
+if '[SWITCH-DIAG] TCPIP: INIT_ENTER' not in s:
+    s = s[:m.end()] + '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] TCPIP: INIT_ENTER\\n");\n  consoleUpdate(NULL);\n#endif' + s[m.end():]
 
-if '[SWITCH-DIAG] tcpip_thread: AFTER_INIT_DONE' not in text:
-    thread_start = text.find('tcpip_thread(')
-    pos = text.find('tcpip_init_done(', thread_start)
-    if pos < 0:
-        raise SystemExit('ERROR: tcpip_init_done() call not found in tcpip_thread()')
-    semi = text.find(';', pos)
+if '[SWITCH-DIAG] TCPIP: BEFORE_DONE' not in s:
+    start = s.find('tcpip_thread(')
+    p = s.find('if (tcpip_init_done != NULL)', start)
+    if p < 0:
+        raise SystemExit('ERROR: tcpip_init_done block not found')
+    s = s[:p] + '#ifdef __SWITCH__\n    printf("[SWITCH-DIAG] TCPIP: BEFORE_DONE\\n");\n    consoleUpdate(NULL);\n#endif\n    ' + s[p:]
+
+if '[SWITCH-DIAG] TCPIP: AFTER_DONE' not in s:
+    start = s.find('tcpip_thread(')
+    p = s.find('tcpip_init_done(', start)
+    if p < 0:
+        raise SystemExit('ERROR: tcpip_init_done call not found')
+    semi = s.find(';', p)
     if semi < 0:
-        raise SystemExit('ERROR: tcpip_init_done() call has no terminator')
-    replacement = text[pos:semi+1] + '\n#ifdef __SWITCH__\n    printf("[SWITCH-DIAG] tcpip_thread: AFTER_INIT_DONE\\n");\n    consoleUpdate(NULL);\n#endif'
-    text = text[:pos] + replacement + text[semi+1:]
+        raise SystemExit('ERROR: tcpip_init_done call has no terminator')
+    s = s[:semi+1] + '\n#ifdef __SWITCH__\n    printf("[SWITCH-DIAG] TCPIP: AFTER_DONE\\n");\n    consoleUpdate(NULL);\n#endif' + s[semi+1:]
 
-# Find sys_thread_new() inside the tcpip_init() function by locating the
-# function body first, then matching the complete call.
-if '[SWITCH-DIAG] tcpip_init: BEFORE_THREAD_CREATE' not in text:
-    init_sig = re.search(r'((?:static\s+)?(?:void)\s+tcpip_init\s*\([^;{}]*\)\s*\{)', text)
-    if not init_sig:
-        raise SystemExit(f'ERROR: tcpip_init() definition not found in {tcpip_path}')
-    body_start = init_sig.end()
-    pos = text.find('sys_thread_new(', body_start)
-    if pos < 0:
-        raise SystemExit('ERROR: sys_thread_new() call not found inside tcpip_init()')
-    open_paren = text.find('(', pos)
-    depth = 0
-    close_paren = None
-    for i in range(open_paren, len(text)):
-        if text[i] == '(':
-            depth += 1
-        elif text[i] == ')':
-            depth -= 1
-            if depth == 0:
-                close_paren = i
-                break
-    if close_paren is None:
-        raise SystemExit('ERROR: unmatched sys_thread_new() call in tcpip_init()')
-    semi = text.find(';', close_paren)
-    if semi < 0:
-        raise SystemExit('ERROR: sys_thread_new() call has no terminator in tcpip_init()')
-    line_start = text.rfind('\n', body_start, pos) + 1
-    indent = re.match(r'[ \t]*', text[line_start:pos]).group(0)
-    statement = text[line_start:semi+1]
-    replacement = (
-        '#ifdef __SWITCH__\n' + indent + 'printf("[SWITCH-DIAG] tcpip_init: BEFORE_THREAD_CREATE\\n");\n' +
-        indent + 'consoleUpdate(NULL);\n' + '#endif\n' + statement + '\n' +
-        '#ifdef __SWITCH__\n' + indent + 'printf("[SWITCH-DIAG] tcpip_init: AFTER_THREAD_CREATE\\n");\n' +
-        indent + 'consoleUpdate(NULL);\n' + '#endif'
-    )
-    text = text[:line_start] + replacement + text[semi+1:]
-
-if '#include <stdio.h>' not in text:
-    text = text.replace('#include "lwip/opt.h"', '#include "lwip/opt.h"\n#ifdef __SWITCH__\n#include <stdio.h>\n#include <switch.h>\n#endif', 1)
-
-tcpip_path.write_text(text)
-print(f'Instrumented lwIP tcpip thread/init handshake: {tcpip_path}')
+tcpip.write_text(s)
+print(f'Instrumented tcpip worker/init handshake: {tcpip}')
