@@ -106,4 +106,9 @@ introduce_thread(pthread_t id)
                 break
 
 if not patched:
-    print('No matching lwIP sys_arch.c thread implementation found; no thread patch applied.')
+    raise SystemExit(
+        'ERROR: Switch thread patch did NOT apply - the expected sys_arch.c code '
+        'pattern was not found. This means the build would have silently used the '
+        'ORIGINAL malloc+mutex thread registration code, not the fix. Failing the '
+        'build here on purpose so this cannot go unnoticed again.'
+    )
