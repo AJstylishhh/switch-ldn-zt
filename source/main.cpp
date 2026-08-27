@@ -9,7 +9,6 @@
 #include <sys/stat.h>
 
 static uint64_t g_network_id = 0;
-static bool g_joined = false;
 
 static void print_event(void* ptr)
 {
@@ -18,11 +17,11 @@ static void print_event(void* ptr)
     switch (msg->event_code) {
         case ZTS_EVENT_NODE_ONLINE: printf("[ZT] Node ONLINE: %" PRIx64 "\n", zts_node_get_id()); break;
         case ZTS_EVENT_NODE_OFFLINE: printf("[ZT] Node OFFLINE\n"); break;
-        case ZTS_EVENT_NETWORK_OK: printf("[ZT] Network OK\n"); g_joined = true; break;
+        case ZTS_EVENT_NETWORK_OK: printf("[ZT] Network OK\n"); break;
         case ZTS_EVENT_NETWORK_ACCESS_DENIED: printf("[ZT] Network access denied\n"); break;
         case ZTS_EVENT_NETWORK_NOT_FOUND: printf("[ZT] Network not found\n"); break;
         case ZTS_EVENT_NETWORK_READY_IP4: printf("[ZT] IPv4 address assigned\n"); break;
-        case ZTS_EVENT_NETWORK_DOWN: printf("[ZT] Network transport down\n"); g_joined = false; break;
+        case ZTS_EVENT_NETWORK_DOWN: printf("[ZT] Network transport down\n"); break;
         default: break;
     }
 }
@@ -56,85 +55,8 @@ static void wait_for_applet_exit()
 {
     while (appletMainLoop()) {
         consoleUpdate(NULL);
-        zts_util_delay(50);
+        svcSleepThread(1000000ULL); // 1ms sleep to yield CPU
     }
-}
-
-static void run_transport_probe()
-{
-    char local_addr[ZTS_IP_MAX_STR_LEN] = {};
-    if (!zts_addr_is_assigned(g_network_id, ZTS_AF_INET)) {
-        printf("[PROBE] No ZeroTier IPv4 address assigned yet.\n");
-        return;
-    }
-    if (zts_addr_get_str(g_network_id, ZTS_AF_INET, local_addr, sizeof(local_addr)) != ZTS_ERR_OK) {
-        printf("[PROBE] Failed to obtain ZeroTier IPv4 address (errno=%d).\n", zts_errno);
-        return;
-    }
-    printf("[PROBE] ZeroTier IPv4: %s\n", local_addr);
-    printf("[PROBE] This is a transport-only test; ldn_mitm is not integrated yet.\n");
-
-    char role[16] = {};
-    if (!read_text_file("sdmc:/config/zerotier-switch/test_role.txt", role, sizeof(role))) {
-        printf("[PROBE] No test_role.txt; skipping socket probe.\n");
-        printf("[PROBE] Use 'server' on one Switch or 'client' on the other.\n");
-        return;
-    }
-    constexpr unsigned int port = 11452;
-
-    if (std::strcmp(role, "server") == 0) {
-        printf("[PROBE] TCP SERVER %s:%u\n", local_addr, port);
-        printf("[PROBE] Waiting for a ZeroTier peer...\n");
-        char remote_addr[ZTS_INET6_ADDRSTRLEN] = {};
-        unsigned short remote_port = 0;
-        const int fd = zts_tcp_server(local_addr, port, remote_addr, sizeof(remote_addr), &remote_port);
-        if (fd < 0) {
-            printf("[PROBE] zts_tcp_server failed: fd=%d errno=%d\n", fd, zts_errno);
-            return;
-        }
-        printf("[PROBE] Accepted %s:%u\n", remote_addr, remote_port);
-        char buf[128] = {};
-        const ssize_t n = zts_read(fd, buf, sizeof(buf) - 1);
-        if (n < 0) printf("[PROBE] zts_read failed: %ld errno=%d\n", (long)n, zts_errno);
-        else {
-            buf[n] = '\0';
-            printf("[PROBE] Received %ld bytes: %s\n", (long)n, buf);
-            const ssize_t echoed = zts_write(fd, buf, static_cast<size_t>(n));
-            printf("[PROBE] Echo result: %ld errno=%d\n", (long)echoed, zts_errno);
-        }
-        zts_close(fd);
-        printf("[PROBE] Server test complete.\n");
-        return;
-    }
-
-    if (std::strcmp(role, "client") == 0) {
-        char peer_addr[ZTS_IP_MAX_STR_LEN] = {};
-        if (!read_text_file("sdmc:/config/zerotier-switch/peer_ip.txt", peer_addr, sizeof(peer_addr))) {
-            printf("[PROBE] client mode requires peer_ip.txt.\n");
-            return;
-        }
-        printf("[PROBE] TCP CLIENT -> %s:%u\n", peer_addr, port);
-        int fd = -1;
-        for (int attempt = 0; attempt < 10 && fd < 0; ++attempt) {
-            fd = zts_tcp_client(peer_addr, port);
-            if (fd < 0) {
-                printf("[PROBE] connect attempt %d failed: errno=%d\n", attempt + 1, zts_errno);
-                zts_util_delay(500);
-            }
-        }
-        if (fd < 0) { printf("[PROBE] Could not connect to peer.\n"); return; }
-        const char* msg = "switch-ldn-zt transport probe";
-        const ssize_t sent = zts_write(fd, msg, std::strlen(msg));
-        printf("[PROBE] Sent %ld bytes.\n", (long)sent);
-        char buf[128] = {};
-        const ssize_t n = zts_read(fd, buf, sizeof(buf) - 1);
-        if (n < 0) printf("[PROBE] zts_read failed: %ld errno=%d\n", (long)n, zts_errno);
-        else { buf[n] = '\0'; printf("[PROBE] Echoed %ld bytes: %s\n", (long)n, buf); }
-        zts_close(fd);
-        printf("[PROBE] Client test complete.\n");
-        return;
-    }
-    printf("[PROBE] Unknown test_role '%s' (use server/client).\n", role);
 }
 
 static int init_zerotier_with_diagnostics()
@@ -145,6 +67,7 @@ static int init_zerotier_with_diagnostics()
     const int pipe_rc = pipe(test_pipe);
     printf("pipe() test result: %d\n", pipe_rc);
     consoleUpdate(NULL);
+
     if (pipe_rc == 0) {
         const char marker = 'Z';
         const ssize_t written = write(test_pipe[1], &marker, 1);
@@ -157,17 +80,14 @@ static int init_zerotier_with_diagnostics()
     } else {
         printf("pipe() compatibility failed; ZeroTier cannot start safely. errno=%d\n", errno);
         consoleUpdate(NULL);
-        svcSleepThread(3000000000ULL);
         return ZTS_ERR_GENERAL;
     }
 
-    svcSleepThread(3000000000ULL);
     printf("Creating ZeroTier service...\n");
     consoleUpdate(NULL);
     const int rc = zts_init_from_storage("sdmc:/config/zerotier-switch/zt");
     printf("zts_init_from_storage returned: %d\n", rc);
     consoleUpdate(NULL);
-    svcSleepThread(3000000000ULL);
     return rc;
 }
 
@@ -179,12 +99,10 @@ int main(int argc, char* argv[])
 
     printf("ZeroTier Switch\n------------------------------\nLoading network configuration...\n\n");
     consoleUpdate(NULL);
-    svcSleepThread(3000000000ULL);
 
     const Result sockRc = socketInitializeDefault();
     printf("socketInitializeDefault: 0x%x\n", sockRc);
     consoleUpdate(NULL);
-    svcSleepThread(3000000000ULL);
     if (R_FAILED(sockRc)) {
         printf("Failed to bring up the network service. Cannot continue.\nClose the app from the Home menu.\n");
         wait_for_applet_exit();
@@ -208,7 +126,6 @@ int main(int argc, char* argv[])
     printf("Network ID : %016" PRIx64 "\n", g_network_id);
     printf("Starting ZeroTier...\n");
     consoleUpdate(NULL);
-    svcSleepThread(3000000000ULL);
 
     const int init_rc = init_zerotier_with_diagnostics();
     if (init_rc != ZTS_ERR_OK) {
@@ -223,29 +140,24 @@ int main(int argc, char* argv[])
 
     printf("[DIAG] About to register ZeroTier event handler...\n");
     consoleUpdate(NULL);
-    svcSleepThread(3000000000ULL);
-
     zts_init_set_event_handler(print_event);
 
     printf("[DIAG] Event handler registration returned.\n");
     consoleUpdate(NULL);
-    svcSleepThread(3000000000ULL);
 
     printf("[DIAG] About to call zts_node_start()...\n");
     consoleUpdate(NULL);
-    svcSleepThread(3000000000ULL);
 
     const int start_rc = zts_node_start();
 
     printf("[DIAG] zts_node_start() returned: %d\n", start_rc);
     consoleUpdate(NULL);
-    svcSleepThread(3000000000ULL);
     if (start_rc != ZTS_ERR_OK) printf("Node start failed.\n");
 
     printf("Waiting for ZeroTier node to come online...\n");
     int waited = 0;
     while (appletMainLoop() && !zts_node_is_online() && waited < 300) {
-        zts_util_delay(100);
+        svcSleepThread(1000000ULL); // 1ms yield
         waited++;
         consoleUpdate(NULL);
     }
@@ -259,14 +171,8 @@ int main(int argc, char* argv[])
         printf("Waiting for network transport...\n");
         waited = 0;
         while (appletMainLoop() && !zts_net_transport_is_ready(g_network_id) && waited < 300) {
-            zts_util_delay(100); waited++; consoleUpdate(NULL);
+            svcSleepThread(1000000ULL); waited++; consoleUpdate(NULL);
         }
-        printf("Waiting for ZeroTier IPv4 assignment...\n");
-        waited = 0;
-        while (appletMainLoop() && !zts_addr_is_assigned(g_network_id, ZTS_AF_INET) && waited < 300) {
-            zts_util_delay(100); waited++; consoleUpdate(NULL);
-        }
-        run_transport_probe();
     }
 
     printf("\nStatus\n------\nZeroTier : %s\nNetwork  : %s\n\nClose the app from the Home menu.\n",
