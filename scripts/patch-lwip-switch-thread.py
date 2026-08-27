@@ -1,34 +1,12 @@
 from pathlib import Path
+import re
 
-# Keep all existing Switch diagnostics at 3 seconds instead of 5 seconds.
 main_cpp = Path('source/main.cpp')
 if main_cpp.exists():
     text = main_cpp.read_text().replace('5000000000ULL', '3000000000ULL')
     main_cpp.write_text(text)
-    print('Switch diagnostics set to 3 seconds.')
 
-# The lwIP Unix port uses pthreads and a heap-allocated thread registry. On
-# Switch, pthread_create() has already been proven to return 0, but execution
-# then stalls before sys_thread_new() returns. Avoid the second malloc and the
-# Unix registry entirely on Switch. libnx already owns the pthread lifecycle;
-# lwIP only needs a non-null sys_thread_t here.
-import re
-
-# The lwIP Unix port uses pthreads and a heap-allocated thread registry. On
-# Switch, pthread_create() has already been proven to return 0, but execution
-# then stalls before sys_thread_new() returns. Avoid the second malloc and the
-# Unix registry entirely on Switch. libnx already owns the pthread lifecycle;
-# lwIP only needs a non-null sys_thread_t here.
-#
-# NOTE: an earlier version of this script matched the target function with an
-# exact multi-line string literal. That failed silently against the real
-# upstream source (there's a trailing space after "sys_thread *" on the
-# signature line that isn't visible in an editor), so the "fix" was never
-# actually applied to any build. This version locates the function by a
-# whitespace-tolerant regex on its signature instead, then replaces the whole
-# function body by brace-matching - robust to exact spacing/line-ending
-# differences between lwIP-contrib revisions.
-patched = False
+lwip_patched = False
 for path in Path('libzt').rglob('sys_arch.c'):
     try:
         text = path.read_text()
@@ -38,63 +16,40 @@ for path in Path('libzt').rglob('sys_arch.c'):
     if 'sys_thread_new' not in text or 'pthread_create' not in text:
         continue
 
-    if '#ifdef __SWITCH__' in text and 'switch_thread_count' in text:
-        print(f'Switch thread patch already present in {path}, nothing to do.')
-        patched = True
-        break
-
-    sig_re = re.compile(
-        r'static\s+struct\s+sys_thread\s*\*\s*\r?\n'
-        r'introduce_thread\s*\(\s*pthread_t\s+id\s*\)\s*\r?\n'
-        r'\s*\{'
-    )
-    m = sig_re.search(text)
-    if not m:
-        print(f'introduce_thread signature not found in {path} (regex miss).')
-        continue
-
-    brace_start = text.index('{', m.start())
-    depth = 0
-    fn_end = -1
-    for i in range(brace_start, len(text)):
-        if text[i] == '{':
-            depth += 1
-        elif text[i] == '}':
-            depth -= 1
-            if depth == 0:
-                fn_end = i + 1
-                break
-    if fn_end < 0:
-        print(f'Could not brace-match introduce_thread body in {path}.')
-        continue
-
-    new_intro = '''static struct sys_thread *
+    if 'switch_thread_count' not in text:
+        sig_re = re.compile(
+            r'static\s+struct\s+sys_thread\s*\*\s*\r?\n'
+            r'introduce_thread\s*\(\s*pthread_t\s+id\s*\)\s*\r?\n\s*\{'
+        )
+        m = sig_re.search(text)
+        if not m:
+            raise SystemExit(f'ERROR: introduce_thread() not found in {path}')
+        brace = text.index('{', m.start())
+        depth = 0
+        end = -1
+        for i in range(brace, len(text)):
+            if text[i] == '{': depth += 1
+            elif text[i] == '}':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end < 0:
+            raise SystemExit(f'ERROR: could not parse introduce_thread() in {path}')
+        new_intro = '''static struct sys_thread *
 introduce_thread(pthread_t id)
 {
 #ifdef __SWITCH__
-  /*
-   * The Unix lwIP port maintains a pthread registry protected by a pthread
-   * mutex and allocates a registry node after pthread_create(). On Horizon
-   * this second heap/mutex operation is unnecessary: libnx already manages
-   * the pthread object. More importantly, it can deadlock against startup
-   * activity in the newly-created lwIP thread.
-   *
-   * Keep a small static pool solely to provide stable, non-null sys_thread_t
-   * values. No Unix registry or heap allocation is used on Switch.
-   */
   static struct sys_thread switch_threads[32];
   static volatile unsigned int switch_thread_count = 0;
   unsigned int slot = __sync_fetch_and_add(&switch_thread_count, 1);
-  if (slot >= 32)
-    return NULL;
+  if (slot >= 32) return NULL;
   switch_threads[slot].next = NULL;
   switch_threads[slot].pthread = id;
   return &switch_threads[slot];
 #else
   struct sys_thread *thread;
-
   thread = (struct sys_thread *)malloc(sizeof(struct sys_thread));
-
   if (thread != NULL) {
     pthread_mutex_lock(&threads_mutex);
     thread->next = threads;
@@ -102,105 +57,82 @@ introduce_thread(pthread_t id)
     threads = thread;
     pthread_mutex_unlock(&threads_mutex);
   }
-
   return thread;
 #endif
 }'''
-
-    text = text[:m.start()] + new_intro + text[fn_end:]
-    path.write_text(text)
-    print(f'Applied Switch static thread-record pool (regex match): {path}')
-    patched = True
-
-    # Second, separate fix: this Unix lwIP port ignores the caller-requested
-    # stack size entirely (LWIP_UNUSED_ARG(stacksize)) and creates the pthread
-    # with a NULL attr, i.e. whatever the toolchain's default pthread stack
-    # size happens to be. For a thread about to run the full lwIP + ZeroTier
-    # driver loop, that default may not be big enough, causing a silent stack
-    # overflow right after pthread_create() returns - which matches exactly
-    # where execution was observed to stop on real hardware.
-    #
-    # This runs AFTER patch-libzt-switch-bootstrap.py, which already wraps this
-    # same pthread_create() call with [SWITCH-DIAG] printf statements and
-    # subtly changes its whitespace in the process. An exact-string match here
-    # (like the first version of this fix used) breaks against that. Match the
-    # call itself with a whitespace-tolerant regex instead, independent of
-    # whatever diagnostic printf lines surround it.
-    create_re = re.compile(
-        r'code\s*=\s*pthread_create\s*\(\s*&tmp\s*,\s*NULL\s*,\s*'
-        r'thread_wrapper\s*,\s*thread_data\s*\)\s*;'
-    )
-    cm = create_re.search(text)
-    if cm:
-        replacement = (
-            '#ifdef __SWITCH__\n'
-            '  pthread_attr_t switch_attr;\n'
-            '  pthread_attr_init(&switch_attr);\n'
-            '  pthread_attr_setstacksize(&switch_attr, 256 * 1024);\n'
-            '  code = pthread_create(&tmp, &switch_attr, thread_wrapper, thread_data);\n'
-            '  pthread_attr_destroy(&switch_attr);\n'
-            '#else\n'
-            '  code = pthread_create(&tmp, NULL, thread_wrapper, thread_data);\n'
-            '#endif'
-        )
-        text = text[:cm.start()] + replacement + text[cm.end():]
+        text = text[:m.start()] + new_intro + text[end:]
         path.write_text(text)
-        print(f'Applied explicit 256KB stack size for Switch lwIP thread: {path}')
-    elif 'pthread_attr_setstacksize(&switch_attr, 256 * 1024)' in text:
-        print('Explicit stack-size fix already present, nothing to do.')
+        print(f'Applied Switch thread registry workaround: {path}')
     else:
-        raise SystemExit(
-            'ERROR: could not locate the pthread_create(&tmp, NULL, thread_wrapper, '
-            'thread_data) call in sys_thread_new via regex either, even allowing for '
-            'surrounding diagnostic printf lines. The call itself may have been '
-            'restructured upstream or by another patch step - inspect the current '
-            'sys_arch.c content directly rather than guessing again.'
-        )
+        print(f'Switch thread registry workaround already present: {path}')
+    lwip_patched = True
     break
 
-if not patched:
-    raise SystemExit(
-        'ERROR: Switch thread patch did NOT apply - introduce_thread() was not '
-        'found via regex either. This means the build would have silently used '
-        'the ORIGINAL malloc+mutex thread registration code, not the fix. '
-        'Failing the build here on purpose so this cannot go unnoticed again.'
-    )
+if not lwip_patched:
+    raise SystemExit('ERROR: no usable lwIP Unix sys_arch.c was found under libzt')
 
-# Third probe: add a print as the literal first instruction the newly spawned
-# thread executes, before it calls into the real driver function. Since
-# "pthread_create returned code=0" already prints successfully (proving the
-# parent thread continues past pthread_create itself), the stall is happening
-# somewhere after that - either later in the parent's own bookkeeping, or
-# inside the brand-new child thread once it starts running. This tells us
-# which one, directly, instead of guessing further.
-for path in Path('libzt').rglob('sys_arch.c'):
+# Instrument the actual libzt driver thread. The child pthread has already been
+# proven to start on hardware; the next useful boundary is the first instruction
+# of zts_main_lwip_driver_loop(), then tcpip_init(), then its initialization
+# semaphore wait.
+vtap = None
+for candidate in Path('libzt').rglob('VirtualTap.cpp'):
     try:
-        text = path.read_text()
+        candidate_text = candidate.read_text()
     except Exception:
         continue
-    if 'thread_wrapper(void *arg)' not in text:
-        continue
-    if '[SWITCH-DIAG] thread_wrapper: child thread alive' in text:
-        print('Child-thread-start probe already present, nothing to do.')
+    if 'zts_main_lwip_driver_loop' in candidate_text:
+        vtap = candidate
         break
 
-    wrapper_re = re.compile(
-        r'(thread_wrapper\s*\(\s*void\s*\*\s*arg\s*\)\s*\r?\n\s*\{)'
-    )
-    wm = wrapper_re.search(text)
-    if not wm:
-        raise SystemExit(
-            'ERROR: could not locate thread_wrapper() to add the child-thread-start probe.'
-        )
+if vtap is None:
+    raise SystemExit('ERROR: VirtualTap.cpp with zts_main_lwip_driver_loop() was not found')
 
-    insert_at = wm.end()
-    probe = (
-        '\n#ifdef __SWITCH__\n'
-        '  printf("[SWITCH-DIAG] thread_wrapper: child thread alive\\n");\n'
-        '  consoleUpdate(NULL);\n'
+text = vtap.read_text()
+if '[SWITCH-DIAG] zts_main_lwip_driver_loop: entered' not in text:
+    fn_re = re.compile(
+        r'(static\s+void\s+zts_main_lwip_driver_loop\s*\(\s*void\s*\*\s*arg\s*\)\s*\{)'
+    )
+    m = fn_re.search(text)
+    if not m:
+        raise SystemExit(f'ERROR: zts_main_lwip_driver_loop() signature not found in {vtap}')
+    text = text[:m.start()] + (
+        m.group(1) + '\n'
+        '#ifdef __SWITCH__\n'
+        '    printf("[SWITCH-DIAG] zts_main_lwip_driver_loop: entered\\n");\n'
+        '    consoleUpdate(NULL);\n'
+        '#endif'
+    ) + text[m.end():]
+
+for old, new in [
+    (
+        '    tcpip_init(zts_tcpip_init_done, &sem);',
+        '#ifdef __SWITCH__\n'
+        '    printf("[SWITCH-DIAG] driver: before tcpip_init\\n");\n'
+        '    consoleUpdate(NULL);\n'
+        '#endif\n'
+        '    tcpip_init(zts_tcpip_init_done, &sem);\n'
+        '#ifdef __SWITCH__\n'
+        '    printf("[SWITCH-DIAG] driver: after tcpip_init\\n");\n'
+        '    consoleUpdate(NULL);\n'
+        '#endif'
+    ),
+    (
+        '    sys_sem_wait(&sem);',
+        '#ifdef __SWITCH__\n'
+        '    printf("[SWITCH-DIAG] driver: before sys_sem_wait\\n");\n'
+        '    consoleUpdate(NULL);\n'
+        '#endif\n'
+        '    sys_sem_wait(&sem);\n'
+        '#ifdef __SWITCH__\n'
+        '    printf("[SWITCH-DIAG] driver: after sys_sem_wait\\n");\n'
+        '    consoleUpdate(NULL);\n'
         '#endif'
     )
-    text = text[:insert_at] + probe + text[insert_at:]
-    path.write_text(text)
-    print(f'Added child-thread-start probe: {path}')
-    break
+]:
+    if old not in text:
+        raise SystemExit(f'ERROR: expected driver statement not found in {vtap}: {old.strip()}')
+    text = text.replace(old, new, 1)
+
+vtap.write_text(text)
+print(f'Instrumented Switch lwIP driver boundaries: {vtap}')
