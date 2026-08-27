@@ -12,6 +12,22 @@ if main_cpp.exists():
 # then stalls before sys_thread_new() returns. Avoid the second malloc and the
 # Unix registry entirely on Switch. libnx already owns the pthread lifecycle;
 # lwIP only needs a non-null sys_thread_t here.
+import re
+
+# The lwIP Unix port uses pthreads and a heap-allocated thread registry. On
+# Switch, pthread_create() has already been proven to return 0, but execution
+# then stalls before sys_thread_new() returns. Avoid the second malloc and the
+# Unix registry entirely on Switch. libnx already owns the pthread lifecycle;
+# lwIP only needs a non-null sys_thread_t here.
+#
+# NOTE: an earlier version of this script matched the target function with an
+# exact multi-line string literal. That failed silently against the real
+# upstream source (there's a trailing space after "sys_thread *" on the
+# signature line that isn't visible in an editor), so the "fix" was never
+# actually applied to any build. This version locates the function by a
+# whitespace-tolerant regex on its signature instead, then replaces the whole
+# function body by brace-matching - robust to exact spacing/line-ending
+# differences between lwIP-contrib revisions.
 patched = False
 for path in Path('libzt').rglob('sys_arch.c'):
     try:
@@ -22,23 +38,35 @@ for path in Path('libzt').rglob('sys_arch.c'):
     if 'sys_thread_new' not in text or 'pthread_create' not in text:
         continue
 
-    old_intro = '''static struct sys_thread *
-introduce_thread(pthread_t id)
-{
-  struct sys_thread *thread;
+    if '#ifdef __SWITCH__' in text and 'switch_thread_count' in text:
+        print(f'Switch thread patch already present in {path}, nothing to do.')
+        patched = True
+        break
 
-  thread = (struct sys_thread *)malloc(sizeof(struct sys_thread));
+    sig_re = re.compile(
+        r'static\s+struct\s+sys_thread\s*\*\s*\r?\n'
+        r'introduce_thread\s*\(\s*pthread_t\s+id\s*\)\s*\r?\n'
+        r'\s*\{'
+    )
+    m = sig_re.search(text)
+    if not m:
+        print(f'introduce_thread signature not found in {path} (regex miss).')
+        continue
 
-  if (thread != NULL) {
-    pthread_mutex_lock(&threads_mutex);
-    thread->next = threads;
-    thread->pthread = id;
-    threads = thread;
-    pthread_mutex_unlock(&threads_mutex);
-  }
-
-  return thread;
-}'''
+    brace_start = text.index('{', m.start())
+    depth = 0
+    fn_end = -1
+    for i in range(brace_start, len(text)):
+        if text[i] == '{':
+            depth += 1
+        elif text[i] == '}':
+            depth -= 1
+            if depth == 0:
+                fn_end = i + 1
+                break
+    if fn_end < 0:
+        print(f'Could not brace-match introduce_thread body in {path}.')
+        continue
 
     new_intro = '''static struct sys_thread *
 introduce_thread(pthread_t id)
@@ -79,36 +107,16 @@ introduce_thread(pthread_t id)
 #endif
 }'''
 
-    if old_intro in text:
-        path.write_text(text.replace(old_intro, new_intro, 1))
-        print(f'Applied Switch static thread-record pool: {path}')
-        patched = True
-        break
-
-    if '#ifdef __SWITCH__' in text and 'thread->next = NULL;' in text and 'threads_mutex' in text:
-        fn_start = text.rfind('static struct sys_thread *', 0, text.find('#ifdef __SWITCH__', text.find('introduce_thread')))
-        if fn_start >= 0:
-            brace = text.find('{', fn_start)
-            depth = 0
-            fn_end = -1
-            for i in range(brace, len(text)):
-                if text[i] == '{': depth += 1
-                elif text[i] == '}':
-                    depth -= 1
-                    if depth == 0:
-                        fn_end = i + 1
-                        break
-            if fn_end > 0:
-                text = text[:fn_start] + new_intro + text[fn_end:]
-                path.write_text(text)
-                print(f'Replaced Switch thread registry with static pool: {path}')
-                patched = True
-                break
+    text = text[:m.start()] + new_intro + text[fn_end:]
+    path.write_text(text)
+    print(f'Applied Switch static thread-record pool (regex match): {path}')
+    patched = True
+    break
 
 if not patched:
     raise SystemExit(
-        'ERROR: Switch thread patch did NOT apply - the expected sys_arch.c code '
-        'pattern was not found. This means the build would have silently used the '
-        'ORIGINAL malloc+mutex thread registration code, not the fix. Failing the '
-        'build here on purpose so this cannot go unnoticed again.'
+        'ERROR: Switch thread patch did NOT apply - introduce_thread() was not '
+        'found via regex either. This means the build would have silently used '
+        'the ORIGINAL malloc+mutex thread registration code, not the fix. '
+        'Failing the build here on purpose so this cannot go unnoticed again.'
     )
