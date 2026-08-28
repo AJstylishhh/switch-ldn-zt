@@ -33,7 +33,6 @@ CPPFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(TOPDIR)/$(dir)/*.cpp)
 OFILES_SRC := $(CPPFILES:.cpp=.o)
 
 export OFILES := $(OFILES_SRC)
-
 export INCLUDE := $(foreach dir,$(INCLUDES),-I$(TOPDIR)/$(dir)) \
                   $(foreach dir,$(LIBDIRS),-I$(dir)/include) \
                   -I$(CURDIR)/$(BUILD)
@@ -52,6 +51,7 @@ export NACPFLAGS += --titleid=0100000000000A01
 all: $(BUILD)
 
 $(BUILD):
+	@python3 $(TOPDIR)/scripts/patch-runtime-hotpath.py
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(TOPDIR)/Makefile
 
