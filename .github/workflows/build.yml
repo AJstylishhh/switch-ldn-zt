@@ -76,7 +76,6 @@ jobs:
           PY
 
           python3 scripts/restore-zt-udp-checksum.py
-          python3 scripts/patch-incoming-auth-trace.py
 
           echo 'Using checked-out lwIP patch script:'
           sha256sum scripts/patch-lwip-switch-thread.py
