@@ -50,7 +50,7 @@ jobs:
           set -eu
           mkdir -p ext/arpa
           printf '%s\n' '#pragma once' '#define __LITTLE_ENDIAN 1234' '#define __BIG_ENDIAN 4321' '#define __BYTE_ORDER __LITTLE_ENDIAN' > ext/endian.h
-          printf '%s\n' '#pragma once' '#include <sys/socket.h>' '#include <netinet/in.h>' > ext/arpa/inet.h
+          printf '%s\n' '#pragma once' '#include <sys/socket.h>' '#include <netinet/in.h' > ext/arpa/inet.h
 
       - name: Patch libzt for Switch
         run: |
@@ -60,6 +60,7 @@ jobs:
       - name: Patch remaining Switch portability gaps
         run: |
           set -eu
+          python3 scripts/patch-switch-phy.py
           python3 - <<'PY'
           from pathlib import Path
           p = Path('libzt/ext/ZeroTierOne/osdep/OSUtils.cpp')
