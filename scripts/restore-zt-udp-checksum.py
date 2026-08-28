@@ -1,4 +1,5 @@
 from pathlib import Path
+import runpy
 
 # The upstream libzt NodeService intentionally enables SO_NO_CHECK, but that
 # is not a good assumption for the Switch/lwIP UDP path while debugging the
@@ -26,3 +27,8 @@ for path in Path("libzt").rglob("NodeService.cpp"):
 
 if not found:
     raise SystemExit("ERROR: active libzt NodeService.cpp not found or PHY constructor not recognized")
+
+# After the checksum setting is restored, instrument the actual ZeroTier
+# authentication boundary. This tells us whether incoming UDP packets are
+# merely reaching NodeService or are being accepted by the root Peer.
+runpy.run_path("scripts/patch-incoming-auth-trace.py", run_name="__main__")
