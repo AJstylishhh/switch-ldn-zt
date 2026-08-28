@@ -185,6 +185,10 @@ static volatile u32 g_bind_n = 0, g_bind_fail = 0;
 static volatile u32 g_tx_ok = 0, g_tx_fail = 0, g_tx_seq = 0;
 static volatile u32 g_rx_ok = 0, g_rx_seq = 0;
 static volatile u32 g_tx_root = 0, g_rx_root = 0;
+static volatile u32 g_tx_log_seq = 0;
+static volatile u32 g_recv_calls = 0, g_recv_empty = 0, g_recv_err = 0;
+static volatile u32 g_recv_errno = 0;
+static volatile u32 g_select_calls = 0, g_select_ready = 0;
 
 extern "C" int __real_socket(int domain, int type, int protocol);
 extern "C" int __real_bind(int fd, const struct sockaddr* addr, socklen_t len);
@@ -246,51 +250,124 @@ extern "C" ssize_t __wrap_sendto(int fd, const void* buf, size_t len, int flags,
         && ntohs(reinterpret_cast<const struct sockaddr_in*>(to)->sin_port) == 9993) {
         __sync_fetch_and_add(&g_tx_root, 1);
     }
+    (void)__sync_fetch_and_add(&g_tx_seq, 1);
 
-    const u32 seq = __sync_fetch_and_add(&g_tx_seq, 1);
-    if ((seq < 12 || (seq % 40) == 0) && to && to->sa_family == AF_INET) {
-        const struct sockaddr_in* s = reinterpret_cast<const struct sockaddr_in*>(to);
-        char ip[INET_ADDRSTRLEN];
-        ip[0] = '\0';
-        inet_ntop(AF_INET, &s->sin_addr, ip, sizeof(ip));
-        char line[176];
-        const int n = snprintf(line, sizeof(line), "[SOCK] sendto %s:%u len=%u -> %ld errno=%d\n",
-                               ip, (unsigned)ntohs(s->sin_port), (unsigned)len,
-                               (long)rc, rc < 0 ? saved : 0);
-        if (n > 0) log_write(line, static_cast<size_t>(n));
+    // Roots reply for the first few seconds and then go permanently silent
+    // while the controller keeps talking, so the question is whether we are
+    // still actually putting well-formed packets on the wire toward the root
+    // IPv4 endpoints afterwards. Log the destination of every root-port send
+    // plus every failing send (with errno and family, to separate genuine
+    // errors from the expected AF_INET6 failures on a console with no IPv6).
+    if (to) {
+        const bool is_root = (to->sa_family == AF_INET)
+            && ntohs(reinterpret_cast<const struct sockaddr_in*>(to)->sin_port) == 9993;
+        const bool failed = (rc < 0);
+        if (is_root || failed) {
+            const u32 seq = __sync_fetch_and_add(&g_tx_log_seq, 1);
+            if (seq < 600) {
+                char ip[46] = "?";
+                unsigned port = 0;
+                if (to->sa_family == AF_INET) {
+                    const struct sockaddr_in* s = reinterpret_cast<const struct sockaddr_in*>(to);
+                    inet_ntop(AF_INET, &s->sin_addr, ip, sizeof(ip));
+                    port = ntohs(s->sin_port);
+                } else if (to->sa_family == AF_INET6) {
+                    const struct sockaddr_in6* s = reinterpret_cast<const struct sockaddr_in6*>(to);
+                    inet_ntop(AF_INET6, &s->sin6_addr, ip, sizeof(ip));
+                    port = ntohs(s->sin6_port);
+                }
+                // Decode the ZeroTier wire header so we can tell which packets
+                // actually reach a root. Layout (Packet.hpp): [0-7] packet ID,
+                // [18] flags byte where bits 0-2 are hops and bits 3-5 are the
+                // cipher suite, [27] verb. Cipher 0 is POLY1305_NONE (signed
+                // but unencrypted -- what HELLO/OK use) and 1 is
+                // POLY1305_SALSA2012 (encrypted). The handshake succeeds and
+                // everything after it is dropped, so the cipher each packet
+                // went out under is the thing worth seeing.
+                char hdr[80] = "";
+                if (len >= 28) {
+                    const unsigned char* p = static_cast<const unsigned char*>(buf);
+                    snprintf(hdr, sizeof(hdr),
+                             " id=%02x%02x%02x%02x%02x%02x%02x%02x cipher=%u hops=%u verb=0x%02x",
+                             p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7],
+                             (unsigned)((p[18] >> 3) & 7), (unsigned)(p[18] & 7),
+                             (unsigned)p[27]);
+                }
+                char line[256];
+                const int n = snprintf(line, sizeof(line),
+                                       "[TX] fd=%d fam=%d to=%s:%u len=%d rc=%d errno=%d%s\n",
+                                       fd, to->sa_family, ip, port,
+                                       static_cast<int>(len), static_cast<int>(rc),
+                                       failed ? saved : 0, hdr);
+                if (n > 0) log_write(line, static_cast<size_t>(n));
+            }
+        }
     }
     return rc;
 }
+
+static volatile u32 g_recv_log_seq = 0;
 
 extern "C" ssize_t __wrap_recvfrom(int fd, void* buf, size_t len, int flags,
                                    struct sockaddr* from, socklen_t* fromlen)
 {
     const ssize_t rc = __real_recvfrom(fd, buf, len, flags, from, fromlen);
+    __sync_fetch_and_add(&g_recv_calls, 1);
     if (rc > 0) {
         __sync_fetch_and_add(&g_rx_ok, 1);
         if (from && from->sa_family == AF_INET
             && ntohs(reinterpret_cast<struct sockaddr_in*>(from)->sin_port) == 9993) {
             __sync_fetch_and_add(&g_rx_root, 1);
         }
-        const u32 seq = __sync_fetch_and_add(&g_rx_seq, 1);
-        if ((seq < 12 || (seq % 10) == 0) && from && from->sa_family == AF_INET) {
+        (void)__sync_fetch_and_add(&g_rx_seq, 1);
+        const u32 seq = __sync_fetch_and_add(&g_recv_log_seq, 1);
+        if (seq < 300 && from && from->sa_family == AF_INET) {
             const struct sockaddr_in* s = reinterpret_cast<const struct sockaddr_in*>(from);
-            char ip[INET_ADDRSTRLEN];
-            ip[0] = '\0';
+            char ip[16];
             inet_ntop(AF_INET, &s->sin_addr, ip, sizeof(ip));
-            char line[176];
-            const int n = snprintf(line, sizeof(line), "[SOCK] recvfrom %s:%u -> %ld bytes\n",
-                                   ip, (unsigned)ntohs(s->sin_port), (long)rc);
+            char hdr[64] = "";
+            if (rc >= 28) {
+                const unsigned char* p = static_cast<const unsigned char*>(buf);
+                snprintf(hdr, sizeof(hdr), " cipher=%u hops=%u verb=0x%02x",
+                         (unsigned)((p[18] >> 3) & 7), (unsigned)(p[18] & 7),
+                         (unsigned)p[27]);
+            }
+            char line[200];
+            const int n = snprintf(line, sizeof(line), "[RX] fd=%d from=%s:%u len=%d%s\n",
+                                   fd, ip, ntohs(s->sin_port), static_cast<int>(rc), hdr);
             if (n > 0) log_write(line, static_cast<size_t>(n));
+        }
+    } else {
+        if (rc == 0) {
+            __sync_fetch_and_add(&g_recv_empty, 1);
+        } else {
+            __sync_fetch_and_add(&g_recv_err, 1);
+            const int e = *__errno();
+            __sync_lock_test_and_set(&g_recv_errno, static_cast<u32>(e));
         }
     }
     return rc;
 }
 
-static volatile u32 g_close_seq = 0;
-static volatile u32 g_sockopt_fail = 0;
+extern "C" int __real_select(int nfds, fd_set* readfds, fd_set* writefds,
+                             fd_set* exceptfds, struct timeval* timeout);
+
+static volatile u32 g_sel_calls = 0, g_sel_ready = 0, g_sel_err = 0;
+
+extern "C" int __wrap_select(int nfds, fd_set* readfds, fd_set* writefds,
+                             fd_set* exceptfds, struct timeval* timeout)
+{
+    const int rc = __real_select(nfds, readfds, writefds, exceptfds, timeout);
+    __sync_fetch_and_add(&g_sel_calls, 1);
+    if (rc > 0) __sync_fetch_and_add(&g_sel_ready, 1);
+    else if (rc < 0) __sync_fetch_and_add(&g_sel_err, 1);
+    return rc;
+}
 
 extern "C" int __real_close(int fd);
+
+static volatile u32 g_close_seq = 0;
+static volatile u32 g_sockopt_fail = 0;
 
 extern "C" int __wrap_close(int fd)
 {
@@ -341,8 +418,10 @@ extern "C" void zt_report_state_files(void)
 
 extern "C" void zt_net_stats(char* out, size_t n)
 {
-    snprintf(out, n, "tx=%u(-%u) rx=%u root_tx=%u root_rx=%u sock=%u(-%u)",
-             g_tx_ok, g_tx_fail, g_rx_ok, g_tx_root, g_rx_root, g_sock_n, g_sock_fail);
+    snprintf(out, n, "tx=%u(-%u) rx=%u root_tx=%u root_rx=%u sock=%u(-%u) recv=%u(e%u/err%u/e#%u) sel=%u(r%u/e%u)",
+             g_tx_ok, g_tx_fail, g_rx_ok, g_tx_root, g_rx_root, g_sock_n, g_sock_fail,
+             g_recv_calls, g_recv_empty, g_recv_err, g_recv_errno,
+             g_sel_calls, g_sel_ready, g_sel_err);
 }
 
 extern "C" int __real_mkdir(const char* path, mode_t mode);

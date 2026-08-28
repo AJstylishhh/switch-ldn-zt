@@ -13,6 +13,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 extern "C" void zt_net_stats(char* out, size_t n);
 extern "C" void zt_report_state_files(void);
@@ -21,20 +22,71 @@ extern "C" void zt_begin_exit(void);
 
 static uint64_t g_network_id = 0;
 static char g_last_ip[64] = {};
+static volatile bool g_node_down = false;
+
+// The peer events report path_count as 0 for every peer, including ones that
+// are demonstrably exchanging traffic with us, so that number cannot be
+// trusted on its own. zts_core_query_path_count()/zts_core_query_path() read
+// ZeroTier's actual live peer table instead, which tells us whether the core
+// really has a usable path to each root or is only ever reaching them via
+// bootstrap endpoints.
+static uint64_t g_peer_ids[24];
+static int g_peer_roles[24];
+static int g_peer_count = 0;
+
+static void remember_peer(uint64_t id, int role)
+{
+    if (!id) return;
+    for (int i = 0; i < g_peer_count; i++) {
+        if (g_peer_ids[i] == id) return;
+    }
+    if (g_peer_count >= (int)(sizeof(g_peer_ids) / sizeof(g_peer_ids[0]))) return;
+    g_peer_ids[g_peer_count] = id;
+    g_peer_roles[g_peer_count] = role;
+    g_peer_count++;
+}
 
 static void print_event(void* ptr)
 {
     const auto* msg = static_cast<const zts_event_msg_t*>(ptr);
     if (!msg) return;
+    char line[192];
+    line[0] = 0;
     switch (msg->event_code) {
-        case ZTS_EVENT_NODE_ONLINE: printf("[ZT] Node ONLINE: %" PRIx64 "\n", zts_node_get_id()); break;
-        case ZTS_EVENT_NODE_OFFLINE: printf("[ZT] Node OFFLINE\n"); break;
-        case ZTS_EVENT_NETWORK_OK: printf("[ZT] Network OK\n"); break;
-        case ZTS_EVENT_NETWORK_ACCESS_DENIED: printf("[ZT] Network access denied\n"); break;
-        case ZTS_EVENT_NETWORK_NOT_FOUND: printf("[ZT] Network not found\n"); break;
-        case ZTS_EVENT_NETWORK_READY_IP4: printf("[ZT] IPv4 address assigned\n"); break;
-        case ZTS_EVENT_NETWORK_DOWN: printf("[ZT] Network transport down\n"); break;
-        default: printf("[ZT] event %d\n", msg->event_code); break;
+        case ZTS_EVENT_NODE_ONLINE: snprintf(line, sizeof(line), "[ZT] Node ONLINE: %" PRIx64 " port=%d\n", zts_node_get_id(), zts_node_get_port()); break;
+        case ZTS_EVENT_NODE_OFFLINE: snprintf(line, sizeof(line), "[ZT] Node OFFLINE (phy port=%d)\n", zts_node_get_port()); break;
+        case ZTS_EVENT_NODE_DOWN: g_node_down = true; snprintf(line, sizeof(line), "[ZT] Node DOWN (Node destructor ran)\n"); break;
+        case ZTS_EVENT_NETWORK_OK: snprintf(line, sizeof(line), "[ZT] Network OK\n"); break;
+        case ZTS_EVENT_NETWORK_ACCESS_DENIED: snprintf(line, sizeof(line), "[ZT] Network access denied\n"); break;
+        case ZTS_EVENT_NETWORK_NOT_FOUND: snprintf(line, sizeof(line), "[ZT] Network not found\n"); break;
+        case ZTS_EVENT_NETWORK_READY_IP4: snprintf(line, sizeof(line), "[ZT] IPv4 address assigned\n"); break;
+        case ZTS_EVENT_NETWORK_DOWN: snprintf(line, sizeof(line), "[ZT] Network transport down\n"); break;
+        case ZTS_EVENT_PEER_DIRECT:
+        case ZTS_EVENT_PEER_RELAY:
+        case ZTS_EVENT_PEER_UNREACHABLE:
+        case ZTS_EVENT_PEER_PATH_DISCOVERED:
+        case ZTS_EVENT_PEER_PATH_DEAD: {
+            const char* name = "peerev";
+            if (msg->event_code == ZTS_EVENT_PEER_PATH_DEAD) name = "PATH_DEAD";
+            else if (msg->event_code == ZTS_EVENT_PEER_UNREACHABLE) name = "UNREACHABLE";
+            else if (msg->event_code == ZTS_EVENT_PEER_DIRECT) name = "DIRECT";
+            else if (msg->event_code == ZTS_EVENT_PEER_RELAY) name = "RELAY";
+            else name = "PATH_DISCOVERED";
+            if (msg->peer) {
+                remember_peer(msg->peer->peer_id, (int)msg->peer->role);
+                snprintf(line, sizeof(line), "[ZT] PEER %s peer=%010" PRIx64 " role=%d paths=%u lat=%d (port=%d)\n", name,
+                         msg->peer->peer_id, (int)msg->peer->role,
+                         msg->peer->path_count, msg->peer->latency, zts_node_get_port());
+            } else {
+                snprintf(line, sizeof(line), "[ZT] PEER %s (no peer info)\n", name);
+            }
+            break;
+        }
+        default: snprintf(line, sizeof(line), "[ZT] event %d\n", msg->event_code); break;
+    }
+    if (line[0]) {
+        zt_log(line);
+        printf("%s", line);
     }
 }
 
@@ -177,9 +229,78 @@ static int init_zerotier_with_diagnostics()
 
     printf("zts_init_set_port: %d\n", zts_init_set_port(9993));
     printf("zts_init_allow_secondary_port: %d\n", zts_init_allow_secondary_port(1));
-    printf("zts_init_allow_port_mapping: %d\n", zts_init_allow_port_mapping(0));
+    printf("zts_init_allow_port_mapping: %d\n", zts_init_allow_port_mapping(1));
     consoleUpdate(NULL);
     return rc;
+}
+
+static void probe_udp_flood()
+{
+    printf("[FLOOD] UDP same-LAN receive test - listening on 0.0.0.0:9999\n");
+    printf("[FLOOD] drains incoming datagrams; exits 3s after the stream stops\n");
+    consoleUpdate(NULL);
+
+    const int s = socket(AF_INET, SOCK_DGRAM, 0);
+    if (s < 0) {
+        printf("[FLOOD] socket fail errno=%d\n", errno);
+        return;
+    }
+
+    struct sockaddr_in addr;
+    std::memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(9999);
+    if (bind(s, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) {
+        printf("[FLOOD] bind fail errno=%d\n", errno);
+        close(s);
+        return;
+    }
+    fcntl(s, F_SETFL, O_NONBLOCK);
+    printf("[FLOOD] bound 0.0.0.0:9999, waiting for incoming UDP stream...\n");
+    consoleUpdate(NULL);
+
+    char buf[2048];
+    u32 ready = 0, recvd = 0, empty = 0, err_count = 0, idle_ms = 0, total_ms = 0, last_report = 0;
+
+    for (;;) {
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 250000;
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(s, &rfds);
+        const int sr = select(s + 1, &rfds, NULL, NULL, &tv);
+        bool got_data = false;
+        if (sr > 0) {
+            ready++;
+            for (;;) {
+                const ssize_t n = recvfrom(s, buf, sizeof(buf), 0, NULL, NULL);
+                if (n > 0) { recvd++; got_data = true; }
+                else if (n == 0) empty++;
+                else break;
+            }
+        } else if (sr < 0) {
+            err_count++;
+        }
+
+        total_ms += 250;
+        if (got_data) idle_ms = 0;
+        else idle_ms += 250;
+        if (idle_ms >= 3000) break;
+
+        if (total_ms - last_report >= 1000) {
+            last_report = total_ms;
+            printf("[FLOOD] t=%ums recvd=%u ready=%u empty=%u err=%u\n",
+                   total_ms, recvd, ready, empty, err_count);
+            consoleUpdate(NULL);
+        }
+    }
+
+    printf("[FLOOD] DONE recvd=%u ready=%u empty=%u err=%u\n",
+           recvd, ready, empty, err_count);
+    consoleUpdate(NULL);
+    close(s);
 }
 
 int main(int argc, char* argv[])
@@ -199,7 +320,18 @@ int main(int argc, char* argv[])
         .tcp_rx_buf_max_size = 0x20000,
         .udp_tx_buf_size     = 0x2400,
         .udp_rx_buf_size     = 0xA500,
-        .sb_efficiency       = 8,
+        // sb_efficiency sizes the shared transfer-memory pool backing ALL
+        // open sockets' buffers (pool size ~= sb_efficiency * (tcp_tx_max +
+        // tcp_rx_max + udp_tx + udp_rx), page-aligned) -- it is NOT scoped
+        // per num_bsd_sessions. Bumping num_bsd_sessions 3->16 without also
+        // raising this left the same fixed-size pool shared across up to
+        // 5x more concurrent sockets. Confirmed on real hardware: once
+        // ZeroTier's socket churn built up (~6 sockets open by t=30s), a
+        // burst of setsockopt(SOL_SOCKET, SO_RCVBUF) and socket() calls
+        // started failing with ENOBUFS (errno=105) -- the pool had run
+        // out -- and the node went offline 4s later, matching the
+        // reproducible "connects then disconnects" symptom exactly.
+        .sb_efficiency       = 16,
         .num_bsd_sessions    = 16,
         .bsd_service_type    = BsdServiceType_Auto,
     };
@@ -212,6 +344,17 @@ int main(int argc, char* argv[])
         fsdevUnmountDevice("sdmc");
         consoleExit(NULL);
         return 1;
+    }
+
+    struct stat st_flag;
+    if (stat("sdmc:/config/zerotier-switch/flood_test", &st_flag) == 0 && S_ISREG(st_flag.st_mode)) {
+        printf("\n*** FLOOD RECEIVE TEST MODE ***\n\n");
+        consoleUpdate(NULL);
+        probe_udp_flood();
+        socketExit();
+        fsdevUnmountDevice("sdmc");
+        consoleExit(NULL);
+        return 0;
     }
 
     mkdir("sdmc:/config", 0777);
@@ -316,15 +459,27 @@ int main(int argc, char* argv[])
                 printf("   ZeroTier IP : %s\n", ip);
                 printf("   Node ID     : %010" PRIx64 "\n", zts_node_get_id());
                 printf("   Network     : %016" PRIx64 "\n", g_network_id);
+                printf("   MTU         : %d\n", zts_net_get_mtu(g_network_id));
                 printf("  ================================\n\n");
             }
             printf("[IP] assigned=%d addr=%s\n", have_ip, ip);
 
-            char stats[160];
+            char stats[256];
             zt_net_stats(stats, sizeof(stats));
             printf("[HB] t=%ds id=%016" PRIx64 " %s %s/%s\n",
                    waited / 100, zts_node_get_id(), stats,
                    online ? "ONLINE" : "offline", ready ? "READY" : "not-ready");
+
+            for (int i = 0; i < g_peer_count; i++) {
+                const int pc = zts_core_query_path_count(g_peer_ids[i]);
+                char p0[80];
+                p0[0] = 0;
+                if (pc > 0) {
+                    if (zts_core_query_path(g_peer_ids[i], 0, p0, sizeof(p0)) != ZTS_ERR_OK) p0[0] = 0;
+                }
+                printf("[PATH] peer=%010" PRIx64 " role=%d paths=%d p0=%s\n",
+                       g_peer_ids[i], g_peer_roles[i], pc, p0[0] ? p0 : "-");
+            }
         }
         if ((waited % 3000) == 0) zt_report_state_files();
         if ((waited % 10) == 0) consoleUpdate(NULL);
@@ -335,6 +490,24 @@ int main(int argc, char* argv[])
 
     zt_begin_exit();
     zt_log("[EXIT] requested, terminating\n");
+    // zts_node_stop() only sets a flag (NodeService::terminate()) and
+    // returns immediately -- the service thread it signals is never
+    // joined anywhere in libzt, so there is no way to know it has
+    // actually finished from the return of zts_node_stop() alone. A
+    // fixed sleep before socketExit() is a guess at how long that
+    // teardown takes, and real hardware testing showed it guessing wrong
+    // (an abort inside ZeroTier's own Bond/Link/Path map teardown,
+    // still racing against socketExit()). ZTS_EVENT_NODE_DOWN is
+    // documented as firing from inside Node's own destructor, i.e. at
+    // the exact point that teardown completes -- wait for it directly
+    // instead of guessing a duration, with a bounded timeout so a
+    // missed/delayed event can't hang the app on exit.
+    zts_node_stop();
+    for (int waited_ms = 0; !g_node_down && waited_ms < 3000; waited_ms += 50) {
+        svcSleepThread(50000000ULL); // 50ms
+    }
+    svcSleepThread(100000000ULL); // 100ms grace period past the event itself
+    socketExit();
     consoleExit(NULL);
     svcExitProcess();
     return 0;

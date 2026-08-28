@@ -17,7 +17,7 @@ INCLUDES := include third_party/libzt/include
 
 ARCH := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CXXFLAGS := -g -Wall -O2 -ffunction-sections $(ARCH) $(INCLUDE) -D__SWITCH__ -fno-rtti -fno-exceptions
-LDFLAGS := -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(TARGET).map -Wl,--wrap=consoleUpdate -Wl,--wrap=_write_r -Wl,--wrap=_ZN8ZeroTier5Utils15getSecureRandomEPvj -Wl,--wrap=exit -Wl,--wrap=abort -Wl,--wrap=_exit -Wl,--wrap=mkdir -Wl,--wrap=pthread_create -Wl,--wrap=fopen -Wl,--wrap=socket -Wl,--wrap=bind -Wl,--wrap=sendto -Wl,--wrap=recvfrom -Wl,--wrap=close -Wl,--wrap=setsockopt
+LDFLAGS := -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(TARGET).map -Wl,--wrap=consoleUpdate -Wl,--wrap=_write_r -Wl,--wrap=_ZN8ZeroTier5Utils15getSecureRandomEPvj -Wl,--wrap=exit -Wl,--wrap=abort -Wl,--wrap=_exit -Wl,--wrap=mkdir -Wl,--wrap=pthread_create -Wl,--wrap=fopen -Wl,--wrap=socket -Wl,--wrap=bind -Wl,--wrap=sendto -Wl,--wrap=recvfrom -Wl,--wrap=close -Wl,--wrap=setsockopt -Wl,--wrap=select
 
 LIBDIRS := $(PORTLIBS) $(LIBNX) $(CURDIR)/third_party/libzt
 LIBS := -lzt -lstdc++ -lm -lnx
