@@ -19,26 +19,20 @@ if peer_cpp is None:
     raise SystemExit("ERROR: active libzt Peer.cpp not found")
 
 
-def add_stdio(s, marker):
+def add_stdio(s, marker, path):
     if "#include <stdio.h>" in s:
         return s
     if marker not in s:
-        raise SystemExit(f"ERROR: include anchor not found in {incoming}")
+        raise SystemExit(f"ERROR: include anchor not found in {path}")
     return s.replace(marker, marker + "#include <stdio.h>\n", 1)
 
-# ---------------- IncomingPacket.cpp ----------------
 s = incoming.read_text()
-s = add_stdio(s, '#include "Trace.hpp"\n')
-
-# Trace invalid MAC using the CURRENT dearmor() API (no RR->identity argument).
+s = add_stdio(s, '#include "Trace.hpp"\n', incoming)
 if "[SWITCH-AUTH] REJECT invalid-MAC" not in s:
     pat = re.compile(
         r'if\s*\(\s*!\s*dearmor\(peer->key\(\),\s*peer->aesKeys\(\)\)\s*\)\s*\{'
-        r'.*?'
-        r'RR->t->incomingPacketMessageAuthenticationFailure\(tPtr,_path,packetId\(\),sourceAddress,hops\(\),"invalid MAC"\);'
-        r'.*?'
-        r'peer->recordIncomingInvalidPacket\(_path\);'
-        r'.*?return true;\s*\}', re.S)
+        r'.*?RR->t->incomingPacketMessageAuthenticationFailure\(tPtr,_path,packetId\(\),sourceAddress,hops\(\),"invalid MAC"\);'
+        r'.*?peer->recordIncomingInvalidPacket\(_path\);.*?return true;\s*\}', re.S)
     m = pat.search(s)
     if not m:
         raise SystemExit("ERROR: current invalid-MAC/dearmor block not found")
@@ -55,15 +49,11 @@ if "[SWITCH-AUTH] REJECT invalid-MAC" not in s:
 \t\t\t\t\t}
 #endif
 \t\t\t\t\t'''
-    block = block.replace(marker, inject + marker, 1)
-    s = s[:m.start()] + block + s[m.end():]
-
+    s = s[:m.start()] + block.replace(marker, inject + marker, 1) + s[m.end():]
 incoming.write_text(s)
 
-# ---------------- Peer.cpp ----------------
 s = peer_cpp.read_text()
-s = add_stdio(s, '#include "Metrics.hpp"\n')
-
+s = add_stdio(s, '#include "Metrics.hpp"\n', peer_cpp)
 if "[SWITCH-AUTH] PEER-RECEIVED" not in s:
     anchor = '''const int64_t now = RR->node->now();\n\n\t_lastReceive = now;'''
     if anchor not in s:
@@ -78,7 +68,7 @@ if "[SWITCH-AUTH] PEER-RECEIVED" not in s:
 \t\t        (unsigned long long)_id.address().toInt(),
 \t\t        (unsigned int)verb,
 \t\t        (unsigned long long)packetId,
-\t\t        RR->topology->isUpstream(_id.identity()) ? 1 : 0,
+\t\t        RR->topology->isUpstream(_id) ? 1 : 0,
 \t\t        hops,
 \t\t        (long long)now);
 \t}
@@ -86,7 +76,6 @@ if "[SWITCH-AUTH] PEER-RECEIVED" not in s:
 
 \t_lastReceive = now;'''
     s = s.replace(anchor, repl, 1)
-
 peer_cpp.write_text(s)
 print(f"IncomingPacket trace applied: {incoming}")
 print(f"Peer receive trace applied: {peer_cpp}")
