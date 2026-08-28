@@ -84,6 +84,20 @@ jobs:
           ! grep -q 'nonlocal changed' scripts/patch-lwip-switch-thread.py
           python3 scripts/patch-lwip-switch-thread.py
 
+      - name: Verify auth diagnostics landed in active sources
+        working-directory: libzt
+        run: |
+          set -eu
+          echo 'Auth diagnostic markers in generated libzt tree:'
+          find . -type f \( -name 'IncomingPacket.cpp' -o -name 'Peer.cpp' \) -print
+          incoming_count="$(grep -R -l --include='IncomingPacket.cpp' '[SWITCH-AUTH] REJECT invalid-MAC' . | wc -l)"
+          peer_count="$(grep -R -l --include='Peer.cpp' '[SWITCH-AUTH] PEER-RECEIVED' . | wc -l)"
+          echo "IncomingPacket diagnostic files: $incoming_count"
+          echo "Peer diagnostic files: $peer_count"
+          test "$incoming_count" -ge 1
+          test "$peer_count" -ge 1
+          echo 'Auth diagnostic source verification: OK'
+
       - name: Configure libzt
         working-directory: libzt
         run: |
