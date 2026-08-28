@@ -1,35 +1,46 @@
 from pathlib import Path
 
-# The upstream libzt VirtualTap constructs its physical UDP layer with
-# noCheck=true. On Nintendo Switch we want normal IPv4 UDP checksums while
-# debugging the ZeroTier root path; some network stacks/NATs are less tolerant
-# of checksum-disabled UDP than desktop clients.
+# ZeroTier's libzt service owns the physical UDP transport in src/NodeService.cpp.
+# The older patch targeted ZeroTierOne/node/VirtualTap.cpp, but this Switch build
+# removes that ZeroTierOne source from the core object list. Therefore that change
+# did not affect the socket actually used by zts_node_start().
+#
+# Test the real PHY constructor by disabling SO_NO_CHECK there as well. Keep the
+# old VirtualTap patch for compatibility with libzt revisions that still use it.
 
-candidates = list(Path("libzt").rglob("VirtualTap.cpp"))
-path = None
-for p in candidates:
+patched = False
+
+for path in Path("libzt").rglob("NodeService.cpp"):
     try:
-        s = p.read_text()
+        s = path.read_text()
     except Exception:
         continue
-    if "_phy(this, false, true)" in s and "class VirtualTap" not in s:
-        # Source file may not contain the class declaration; accept the file
-        # based on the constructor initializer below.
-        path = p
+    needle = "_phy(this, false, true)"
+    if needle in s:
+        if s.count(needle) != 1:
+            raise SystemExit(f"ERROR: expected one {needle} in {path}, found {s.count(needle)}")
+        s = s.replace(needle, "_phy(this, false, false)", 1)
+        path.write_text(s)
+        print(f"Switch PHY patch: disabled SO_NO_CHECK in active libzt NodeService: {path}")
+        patched = True
         break
-    if "_phy(this, false, true)" in s:
-        path = p
+
+# Also patch the legacy ZeroTierOne VirtualTap when present. This is harmless if
+# that source is not linked, and preserves compatibility with older layouts.
+for path in Path("libzt").rglob("VirtualTap.cpp"):
+    try:
+        s = path.read_text()
+    except Exception:
+        continue
+    needle = "_phy(this, false, true)"
+    if needle in s:
+        if s.count(needle) != 1:
+            raise SystemExit(f"ERROR: expected one {needle} in {path}, found {s.count(needle)}")
+        s = s.replace(needle, "_phy(this, false, false)", 1)
+        path.write_text(s)
+        print(f"Switch PHY patch: disabled SO_NO_CHECK in legacy VirtualTap: {path}")
+        patched = True
         break
 
-if path is None:
-    raise SystemExit("ERROR: could not find libzt VirtualTap.cpp with _phy(this, false, true)")
-
-s = path.read_text()
-needle = "_phy(this, false, true)"
-count = s.count(needle)
-if count != 1:
-    raise SystemExit(f"ERROR: expected exactly one {needle}, found {count} in {path}")
-
-s = s.replace(needle, "_phy(this, false, false)", 1)
-path.write_text(s)
-print(f"Switch PHY patch: disabled SO_NO_CHECK in {path}")
+if not patched:
+    raise SystemExit("ERROR: could not find an active ZeroTier PHY constructor with noCheck=true")
