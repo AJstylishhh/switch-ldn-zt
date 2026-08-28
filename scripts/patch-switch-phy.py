@@ -68,15 +68,23 @@ if not patched:
     raise SystemExit("ERROR: could not find active libzt NodeService.cpp")
 
 # Instrument the actual UDP select/recvfrom boundary in the active Phy.hpp.
+# Current ZeroTierOne keeps this header under ext/ZeroTierOne/osdep/Phy.hpp.
+# Do not depend on one exact function signature because upstream has changed
+# the UDP poll implementation over time (including a Linux-only recvmmsg path).
+phy_found = False
 for path in Path("libzt").rglob("Phy.hpp"):
     try:
         s = path.read_text()
     except Exception:
         continue
 
-    # Only patch the ZeroTier PHY header that contains udpBind/udpSend/poll.
-    if "inline PhySocket* udpBind" not in s or "inline void poll(unsigned long timeout)" not in s:
+    # Identify the ZeroTier PHY header by the actual UDP implementation rather
+    # than an exact whitespace/signature match that can break on upstream
+    # changes.
+    if "udpBind(" not in s or "recvfrom(" not in s or "phyOnDatagram" not in s:
         continue
+
+    phy_found = True
 
     if "[SWITCH-PHY] UDP recv" in s:
         print(f"Switch PHY receive trace already present: {path}")
@@ -92,9 +100,7 @@ for path in Path("libzt").rglob("Phy.hpp"):
             1,
         )
 
-    # Give the Switch PHY a tiny amount of receive-path evidence. This is
-    # intentionally capped; it does not run a periodic logger and does not
-    # alter select/recvfrom behavior.
+    # The current upstream non-Linux UDP path uses this recvfrom statement.
     target = "long n = (long)::recvfrom(s->sock, buf, sizeof(buf), 0, (struct sockaddr*)&ss, &slen);\n"
     if target not in s:
         raise SystemExit(f"ERROR: active recvfrom() statement not found in {path}")
@@ -112,7 +118,7 @@ for path in Path("libzt").rglob("Phy.hpp"):
 
     # Add a single trace on select wakeups for the first few UDP events. This
     # tells us whether the lwIP select layer is seeing the incoming socket at
-    # all. It is deliberately placed only in the UDP case.
+    # all. It is deliberately capped; it does not alter select/recvfrom.
     udp_marker = "case ZT_PHY_SOCKET_UDP:\n\t\t\t\t\tif (FD_ISSET(s->sock, &rfds)) {\n"
     if udp_marker not in s:
         raise SystemExit(f"ERROR: UDP poll case marker not found in {path}")
@@ -129,5 +135,6 @@ for path in Path("libzt").rglob("Phy.hpp"):
     path.write_text(s)
     print(f"Switch PHY select/recv trace applied: {path}")
     break
-else:
+
+if not phy_found:
     raise SystemExit("ERROR: active libzt Phy.hpp not found")
