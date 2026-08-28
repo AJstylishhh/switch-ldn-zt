@@ -108,7 +108,7 @@ static void probe_network()
 
     static const unsigned char query[] = {
         0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x08, 'z', 'e', 'r', 'o', 't', 'i', 'e', 'r', 0x03, 'c', 'o', 'm', 0x00,
+        0x08, 'z', 'e', 'r', 'o', 't', 'i', 'e', 0x03, 'c', 'o', 'm', 0x00,
         0x00, 0x01, 0x00, 0x01
     };
     struct sockaddr_in dst;
@@ -176,7 +176,7 @@ static int init_zerotier_with_diagnostics()
     if (rc != ZTS_ERR_OK) return rc;
 
     printf("zts_init_set_port: %d\n", zts_init_set_port(9993));
-    printf("zts_init_allow_secondary_port: %d\n", zts_init_allow_secondary_port(0));
+    printf("zts_init_allow_secondary_port: %d\n", zts_init_allow_secondary_port(1));
     printf("zts_init_allow_port_mapping: %d\n", zts_init_allow_port_mapping(0));
     consoleUpdate(NULL);
     return rc;
@@ -200,7 +200,7 @@ int main(int argc, char* argv[])
         .udp_tx_buf_size     = 0x2400,
         .udp_rx_buf_size     = 0xA500,
         .sb_efficiency       = 8,
-        .num_bsd_sessions    = 3,
+        .num_bsd_sessions    = 16,
         .bsd_service_type    = BsdServiceType_Auto,
     };
     const Result sockRc = socketInitialize(&sock_cfg);
