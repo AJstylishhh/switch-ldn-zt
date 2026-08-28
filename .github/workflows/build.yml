@@ -75,6 +75,8 @@ jobs:
           print('OSUtils.cpp sys/uio.h guard: OK')
           PY
 
+          python3 scripts/restore-zt-udp-checksum.py
+
           echo 'Using checked-out lwIP patch script:'
           sha256sum scripts/patch-lwip-switch-thread.py
           python3 -m py_compile scripts/patch-lwip-switch-thread.py
