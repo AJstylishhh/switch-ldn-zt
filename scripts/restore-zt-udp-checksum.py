@@ -1,10 +1,8 @@
 from pathlib import Path
-import runpy
 
-# The upstream libzt NodeService intentionally enables SO_NO_CHECK, but that
-# is not a good assumption for the Switch/lwIP UDP path while debugging the
-# ONLINE -> OFFLINE failure. Restore normal UDP checksums for the Switch build
-# so root replies are tested against a standards-compliant UDP datagram.
+# Restore upstream libzt UDP checksum behavior for the Switch build.
+# This script must remain independent of experimental auth tracing so CI can
+# always produce a green NRO while we debug the runtime OFFLINE transition.
 
 found = False
 for path in Path("libzt").rglob("NodeService.cpp"):
@@ -28,7 +26,7 @@ for path in Path("libzt").rglob("NodeService.cpp"):
 if not found:
     raise SystemExit("ERROR: active libzt NodeService.cpp not found or PHY constructor not recognized")
 
-# After the checksum setting is restored, instrument the actual ZeroTier
-# authentication boundary. This tells us whether incoming UDP packets are
-# merely reaching NodeService or are being accepted by the root Peer.
-runpy.run_path("scripts/patch-incoming-auth-trace.py", run_name="__main__")
+# Deliberately do not invoke the experimental IncomingPacket auth tracer here.
+# The current vendored ZeroTier source layout does not match that tracer, and
+# a diagnostic script must never be allowed to break the production build.
+print("IncomingPacket auth trace: disabled for green-build baseline")
