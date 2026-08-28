@@ -288,3 +288,81 @@ if '[SWITCH-DIAG] thread_wrapper: child thread alive' not in sys_arch.read_text(
     s2 = s2[:wm.end()] + '\n#ifdef __SWITCH__\n  printf("[SWITCH-DIAG] thread_wrapper: child thread alive\\n");\n  consoleUpdate(NULL);\n#endif' + s2[wm.end():]
     sys_arch.write_text(s2)
     print(f'Re-added thread_wrapper child-thread-alive probe: {sys_arch}')
+
+# ---------------------------------------------------------------------------
+# Fix OSUtils::now() to use a monotonic clock on Switch.
+#
+# ZeroTier's entire internal scheduler (when to send the next keepalive to
+# root servers, connection timeouts, etc.) is driven by OSUtils::now(), which
+# on every non-Windows platform (including our Switch build) just calls
+# gettimeofday() - real wall-clock time. The Switch, like any always-online
+# device, does a background time sync shortly after getting network
+# connectivity; if that sync corrects the clock at all while the app is
+# running, every scheduled deadline computed as "now() + X" becomes wrong in
+# one direction or the other. This is a strong candidate for why the node
+# reliably goes offline ~30-something seconds in on completely different
+# networks - the failure timing tracks "time since connectivity", not
+# anything network-specific.
+#
+# Fix: capture a wall-clock baseline once, then advance purely from the
+# hardware monotonic tick counter (cntpct_el0 via armGetSystemTick(), which
+# cannot be adjusted by any background time-sync) for everything after that.
+# ---------------------------------------------------------------------------
+for path in Path('libzt').rglob('OSUtils.hpp'):
+    try:
+        text = path.read_text()
+    except Exception:
+        continue
+    if 'switch_monotonic_now' in text:
+        print('OSUtils::now() Switch monotonic patch already present, nothing to do.')
+        break
+
+    now_re = re.compile(
+        r'static inline int64_t now\(\)\s*\{.*?\};',
+        re.DOTALL,
+    )
+    m = now_re.search(text)
+    if not m:
+        raise SystemExit(
+            'ERROR: could not locate OSUtils::now() to add the Switch monotonic-clock fix.'
+        )
+
+    new_now = '''static inline int64_t now()
+\t{
+#ifdef __SWITCH__
+\t\tstatic int64_t switch_wallclock_baseline_ms = 0;
+\t\tstatic u64 switch_tick_baseline = 0;
+\t\tif (switch_tick_baseline == 0) {
+\t\t\tstruct timeval tv0;
+\t\t\tgettimeofday(&tv0,(struct timezone *)0);
+\t\t\tswitch_wallclock_baseline_ms = (1000LL * (int64_t)tv0.tv_sec) + (int64_t)(tv0.tv_usec / 1000);
+\t\t\tswitch_tick_baseline = armGetSystemTick();
+\t\t}
+\t\tconst u64 switch_monotonic_now = armGetSystemTick();
+\t\tconst int64_t switch_elapsed_ms = (int64_t)(armTicksToNs(switch_monotonic_now - switch_tick_baseline) / 1000000ULL);
+\t\treturn switch_wallclock_baseline_ms + switch_elapsed_ms;
+#elif defined(__WINDOWS__)
+\t\tFILETIME ft;
+\t\tSYSTEMTIME st;
+\t\tULARGE_INTEGER tmp;
+\t\tGetSystemTime(&st);
+\t\tSystemTimeToFileTime(&st,&ft);
+\t\ttmp.LowPart = ft.dwLowDateTime;
+\t\ttmp.HighPart = ft.dwHighDateTime;
+\t\treturn (int64_t)( ((tmp.QuadPart - 116444736000000000LL) / 10000L) + st.wMilliseconds );
+#else
+\t\tstruct timeval tv;
+\t\tgettimeofday(&tv,(struct timezone *)0);
+\t\treturn ( (1000LL * (int64_t)tv.tv_sec) + (int64_t)(tv.tv_usec / 1000) );
+#endif
+\t};'''
+
+    text = text[:m.start()] + new_now + text[m.end():]
+
+    if '#ifdef __SWITCH__\n#include <switch.h>' not in text:
+        include_anchor = text.find('#include')
+        text = text[:include_anchor] + '#ifdef __SWITCH__\n#include <switch.h>\n#endif\n' + text[include_anchor:]
+
+    path.write_text(text)
+    print(f'Applied Switch monotonic-clock fix to OSUtils::now(): {path}')
+    break
