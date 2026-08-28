@@ -60,15 +60,15 @@ if count != 1:
     bs2 = bs
 bs = bs2
 
-if 'interfacesEnumerated = false;' not in bs:
+switch_enum_override = '#ifdef __SWITCH__\n\t\tinterfacesEnumerated = false;\n#endif'
+if switch_enum_override not in bs:
     marker = 'bool interfacesEnumerated = true;'
     if marker not in bs:
         raise SystemExit('Binder.hpp interface enumeration marker not found')
-    bs = bs.replace(
-        marker,
-        marker + '\n#ifdef __SWITCH__\n\t\tinterfacesEnumerated = false;\n#endif',
-        1,
-    )
+    bs = bs.replace(marker, marker + '\n' + switch_enum_override, 1)
+    print('Binder.hpp: forced interfacesEnumerated = false on Switch')
+else:
+    print('Binder.hpp: Switch enumeration override already present')
 
 binder.write_text(bs)
 
