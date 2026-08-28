@@ -366,3 +366,58 @@ for path in Path('libzt').rglob('OSUtils.hpp'):
     path.write_text(text)
     print(f'Applied Switch monotonic-clock fix to OSUtils::now(): {path}')
     break
+
+# ---------------------------------------------------------------------------
+# Fix __BYTE_ORDER never being defined at all for __SWITCH__ builds.
+#
+# Constants.hpp only defines __BYTE_ORDER/__LITTLE_ENDIAN/__BIG_ENDIAN inside
+# branches gated on __linux__, __APPLE__, __FreeBSD__/__OpenBSD__/__NetBSD__,
+# or _WIN32/_WIN64 - none of which are defined for a Switch build. The one
+# generic fallback that would have caught this (#ifndef __BYTE_ORDER /
+# #include <endian.h>) was itself commented out by the very first Switch
+# patch applied to this codebase (a blanket sed replacement that matched
+# every occurrence of that include, not just the one it was aimed at).
+#
+# Net effect: __BYTE_ORDER is undefined throughout this entire build. In
+# preprocessor #if checks an undefined macro evaluates to 0, so any
+# "#if __BYTE_ORDER == __BIG_ENDIAN" check silently evaluates true (0 == 0) -
+# meaning ZeroTier's protocol code believes it's running on a big-endian
+# machine, when aarch64/Switch is little-endian. This would corrupt
+# multi-byte field parsing in incoming packets without any visible error,
+# which fits the observed symptom exactly: tx keeps climbing (sending
+# doesn't depend on this), while genuinely-arriving replies
+# (confirmed reaching NodeService) get silently rejected after that.
+for path in Path('libzt').rglob('Constants.hpp'):
+    try:
+        text = path.read_text()
+    except Exception:
+        continue
+    if '__SWITCH__ byte order fix' in text:
+        print('Constants.hpp byte-order fix already present, nothing to do.')
+        break
+    if 'ZT_INLINE' not in text:
+        continue  # not the right Constants.hpp
+
+    anchor = '#ifndef ZT_INLINE\n#define ZT_INLINE inline\n#endif\n'
+    if anchor not in text:
+        raise SystemExit('ERROR: could not locate anchor point in Constants.hpp for byte-order fix')
+
+    byte_order_fix = (
+        anchor +
+        '\n// __SWITCH__ byte order fix: none of the platform branches below match a\n'
+        '// Switch build, and the generic <endian.h> fallback further down was\n'
+        '// disabled by an earlier patch. Define it explicitly instead of letting it\n'
+        '// silently stay undefined (which would evaluate as big-endian in #if checks).\n'
+        '// aarch64 on Switch always runs little-endian.\n'
+        '#ifdef __SWITCH__\n'
+        '#ifndef __BYTE_ORDER\n'
+        '#define __BIG_ENDIAN 4321\n'
+        '#define __LITTLE_ENDIAN 1234\n'
+        '#define __BYTE_ORDER __LITTLE_ENDIAN\n'
+        '#endif\n'
+        '#endif\n'
+    )
+    text = text.replace(anchor, byte_order_fix, 1)
+    path.write_text(text)
+    print(f'Applied explicit __SWITCH__ byte-order definition: {path}')
+    break
