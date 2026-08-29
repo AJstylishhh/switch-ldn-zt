@@ -10,6 +10,7 @@ namespace ztbridge {
 static constexpr const char *ConfigDir = "sdmc:/config/switch-ldn-zt";
 static constexpr const char *NetworkFile = "sdmc:/config/switch-ldn-zt/network_id.txt";
 static constexpr const char *PeerFile = "sdmc:/config/switch-ldn-zt/peer_ip.txt";
+static constexpr unsigned short LdnPort = 11452;
 static uint64_t gNetworkId = 0;
 static char gPeerIp[ZTS_INET_ADDRSTRLEN] = {0};
 static char gLocalIp[ZTS_INET_ADDRSTRLEN] = {0};
@@ -108,9 +109,10 @@ int close(int fd) { return zts_bsd_close(fd); }
 ssize_t send(int fd, const void *buf, size_t len) { return zts_bsd_send(fd, buf, len, 0); }
 
 ssize_t sendto(int fd, const void *buf, size_t len, const sockaddr_in *addr) {
+    (void)addr;
     zts_sockaddr zaddr{};
     zts_socklen_t zlen = sizeof(zaddr);
-    if (zts_util_ipstr_to_saddr(gPeerIp, ntohs(addr->sin_port), &zaddr, &zlen) != ZTS_ERR_OK) return -1;
+    if (zts_util_ipstr_to_saddr(gPeerIp, LdnPort, &zaddr, &zlen) != ZTS_ERR_OK) return -1;
     return zts_bsd_sendto(fd, buf, len, 0, &zaddr, zlen);
 }
 
