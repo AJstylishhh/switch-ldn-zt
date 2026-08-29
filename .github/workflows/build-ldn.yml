@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'ldn_mitm/**'
+      - 'scripts/patch-ldn-zt.py'
+      - 'scripts/zt_bridge.*'
       - '.gitmodules'
       - '.github/workflows/build-ldn.yml'
   workflow_dispatch:
@@ -26,10 +28,48 @@ jobs:
         run: |
           set -eu
           test "$(git -C ldn_mitm rev-parse HEAD)" = "511e3026afe0dfe42f43b7b231872e4df6167bbe"
+          test "$(git -C libzt rev-parse HEAD)" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
           test -f ldn_mitm/ldn_mitm/Makefile
           test -f ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk
+          test -f scripts/patch-ldn-zt.py
+          test -f scripts/zt_bridge.cpp
+          test -f scripts/zt_bridge.hpp
 
-      - name: Build ldn_mitm sysmodule
+      - name: Build libzt for Switch
+        working-directory: libzt
+        run: |
+          set -eu
+          export DEVKITA64=/opt/devkitpro/devkitA64
+          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
+          cmake -S . -B build-switch \
+            -DCMAKE_TOOLCHAIN_FILE=/__w/switch-ldn-zt/switch-ldn-zt/cmake/switch.toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_STATIC_LIB=ON \
+            -DBUILD_SHARED_LIB=OFF \
+            -DBUILD_HOST_EXAMPLES=OFF \
+            -DBUILD_HOST_SELFTEST=OFF \
+            -DALLOW_INSTALL_TARGET=OFF \
+            -DZTS_DISABLE_CENTRAL_API=ON \
+            -DSWITCH=ON \
+            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port/include" \
+            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port/include"
+          cmake --build build-switch --target zt-static --parallel 2
+          mkdir -p ../third_party/libzt/include ../third_party/libzt/lib
+          cp include/ZeroTierSockets.h ../third_party/libzt/include/
+          cp "$(find build-switch -type f -name 'libzt.a' | head -1)" ../third_party/libzt/lib/
+          test -s ../third_party/libzt/lib/libzt.a
+
+      - name: Patch LDN socket transport to ZeroTier
+        run: |
+          set -eu
+          python3 scripts/patch-ldn-zt.py
+          test -f ldn_mitm/ldn_mitm/source/zt_bridge.cpp
+          grep -q 'ztbridge::poll' ldn_mitm/ldn_mitm/source/lan_protocol.cpp
+          grep -q 'ztbridge::connect' ldn_mitm/ldn_mitm/source/lan_discovery.cpp
+          grep -q 'ztbridge::init' ldn_mitm/ldn_mitm/source/ldn_icommunication.cpp
+          grep -q 'third_party/libzt' ldn_mitm/ldn_mitm/Makefile
+
+      - name: Build LDN ZeroTier sysmodule
         working-directory: ldn_mitm/ldn_mitm
         run: |
           set -eu
@@ -38,18 +78,21 @@ jobs:
           test -s ldn_mitm.nsp
           ls -lh ldn_mitm.nsp
 
-      - name: Package sysmodule
+      - name: Package sysmodule and config template
         run: |
           set -eu
           mkdir -p dist/atmosphere/contents/4200000000000010
+          mkdir -p dist/config/switch-ldn-zt
           cp ldn_mitm/ldn_mitm/ldn_mitm.nsp dist/atmosphere/contents/4200000000000010/exefs.nsp
+          printf 'YOUR_ZEROTIER_NETWORK_ID\n' > dist/config/switch-ldn-zt/network_id.txt
+          printf 'PEER_SWITCH_ZEROTIER_IP\n' > dist/config/switch-ldn-zt/peer_ip.txt
           test -s dist/atmosphere/contents/4200000000000010/exefs.nsp
           cd dist
-          zip -r ../ldn-mitm-sysmodule.zip atmosphere
+          zip -r ../ldn-zt-sysmodule.zip atmosphere config
 
-      - name: Upload LDN sysmodule
+      - name: Upload LDN ZeroTier sysmodule
         uses: actions/upload-artifact@v4
         with:
-          name: ldn-mitm-sysmodule
-          path: ldn-mitm-sysmodule.zip
+          name: ldn-zt-sysmodule
+          path: ldn-zt-sysmodule.zip
           retention-days: 14
