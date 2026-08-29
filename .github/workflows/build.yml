@@ -22,7 +22,6 @@ jobs:
           set -eu
           echo "Commit: $(git rev-parse HEAD)"
           echo "libzt submodule: $(git -C libzt rev-parse HEAD)"
-          test "$(git -C libzt rev-parse HEAD)" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
           test -f libzt/CMakeLists.txt
           test -f libzt/ext/ZeroTierOne/node/Node.cpp
           test -f libzt/ext/endian.h

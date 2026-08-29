@@ -14,7 +14,10 @@ build/
 
 third_party/
 
-libzt/
+# The top-level libzt/ is now a real submodule (nx-mod/libzt-nx), tracked
+# intentionally. pc-diag/libzt/ stays untracked -- it's a deliberately stock,
+# unpatched libzt clone used as a control build, re-cloned fresh each time.
+/pc-diag/libzt/
 
 dist/
 libzt-switch.tar.gz
@@ -25,5 +28,11 @@ desktop.ini
 *.swp
 *~
 
-# Local config with our own ZeroTier network ID -- not for the shared repo
-config/
+# Local config with our own ZeroTier network ID -- not for the shared repo.
+# The *.example file is a tracked template with a dummy ID; the real
+# network_id.txt files (both here and under pc-diag/config/) stay local-only.
+# The "**/" prefix is required on both lines -- a bare "config/*" (unlike a
+# bare "config/") is anchored to the repo root by gitignore's own rules, and
+# silently stopped matching pc-diag/config/ when this was first written.
+**/config/*
+!**/config/network_id.txt.example
