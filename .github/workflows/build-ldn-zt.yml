@@ -1,0 +1,79 @@
+name: Build LDN over ZeroTier prototype
+
+on:
+  push:
+    branches: ["feature/ldn-zt-transport"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-ldn-zt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container: devkitpro/devkita64:latest
+    steps:
+      - name: Checkout project and pinned ldn_mitm
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+      - name: Verify pinned sources
+        run: |
+          set -eu
+          echo "Project: $(git rev-parse HEAD)"
+          echo "ldn_mitm: $(git -C ldn_mitm rev-parse HEAD)"
+          test "$(git -C ldn_mitm rev-parse HEAD)" = "9a2639eff5b2e60065be3dfae69c46de6c3d7648"
+      - name: Verify devkitA64
+        run: |
+          set -eu
+          export DEVKITA64=/opt/devkitpro/devkitA64
+          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
+          test -x "$DEVKITA64/bin/aarch64-none-elf-gcc"
+          test -x "$DEVKITA64/bin/aarch64-none-elf-g++"
+          test "$(aarch64-none-elf-gcc -dumpmachine)" = "aarch64-none-elf"
+      - name: Clone and build Switch libzt
+        run: |
+          set -eu
+          git clone --depth 1 --recurse-submodules https://github.com/zerotier/libzt.git libzt
+          mkdir -p libzt/ext/arpa
+          printf '%s\n' '#pragma once' '#define __LITTLE_ENDIAN 1234' '#define __BIG_ENDIAN 4321' '#define __BYTE_ORDER __LITTLE_ENDIAN' > libzt/ext/endian.h
+          printf '%s\n' '#pragma once' '#include <sys/socket.h>' '#include <netinet/in.h>' > libzt/ext/arpa/inet.h
+          python3 scripts/patch-libzt-switch-bootstrap.py
+          python3 scripts/patch-switch-phy.py
+          python3 scripts/restore-zt-udp-checksum.py
+          python3 scripts/patch-zt-upstream-keepalive.py
+          python3 scripts/patch-lwip-switch-thread.py
+          export DEVKITA64=/opt/devkitpro/devkitA64
+          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
+          cmake -S libzt -B libzt/build-switch \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/switch.toolchain.cmake" \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_STATIC_LIB=ON -DBUILD_SHARED_LIB=OFF \
+            -DBUILD_HOST_EXAMPLES=OFF -DBUILD_HOST_SELFTEST=OFF -DALLOW_INSTALL_TARGET=OFF \
+            -DZTS_DISABLE_CENTRAL_API=ON -DSWITCH=ON \
+            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I$GITHUB_WORKSPACE/libzt/ext -I$GITHUB_WORKSPACE/libzt/ext/lwip-contrib/ports/unix/port/include" \
+            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I$GITHUB_WORKSPACE/libzt/ext -I$GITHUB_WORKSPACE/libzt/ext/lwip-contrib/ports/unix/port/include"
+          cmake --build libzt/build-switch --target zt-static --parallel 2
+          rm -rf third_party/libzt
+          mkdir -p third_party/libzt/include third_party/libzt/lib
+          cp libzt/include/ZeroTierSockets.h third_party/libzt/include/
+          cp "$(find libzt/build-switch -type f -name libzt.a | head -1)" third_party/libzt/lib/libzt.a
+          test -s third_party/libzt/lib/libzt.a
+      - name: Patch ldn_mitm for ZeroTier transport
+        run: |
+          set -eu
+          python3 scripts/patch-ldn-mitm-zt.py
+          python3 scripts/patch-ldn-mitm-build.py
+          grep -n "zts_bsd_poll\|zts_bsd_socket\|zt_bridge::ipv4_address" ldn_mitm/ldn_mitm/source/lan_protocol.cpp ldn_mitm/ldn_mitm/source/lan_discovery.cpp ldn_mitm/ldn_mitm/source/ldn_icommunication.cpp
+          grep -n "third_party/libzt" ldn_mitm/ldn_mitm/Makefile
+      - name: Build ldn_mitm NSP
+        run: |
+          set -eu
+          make -C ldn_mitm ldn_mitm
+          test -s ldn_mitm/ldn_mitm/ldn_mitm.nsp
+          ls -lh ldn_mitm/ldn_mitm/ldn_mitm.nsp
+      - name: Upload LDN prototype
+        uses: actions/upload-artifact@v4
+        with:
+          name: ldn-zt-prototype
+          path: ldn_mitm/ldn_mitm/ldn_mitm.nsp
+          retention-days: 14
