@@ -1,7 +1,7 @@
 #include "zt_bridge.hpp"
+#include "debug.hpp"
 #include <ZeroTierSockets.h>
 #include <arpa/inet.h>
-#include <stratosphere.hpp>
 #include <stdio.h>
 #include <string.h>
 
@@ -30,16 +30,17 @@ static bool read_line(const char *path, char *out, size_t len) {
 
 int init() {
     if (gStarted) return 0;
-
     char nwid[32] = {0};
     if (!read_line(NetworkFile, nwid, sizeof(nwid))) {
         LogFormat("ZT-LDN: missing %s", NetworkFile);
         return -1;
     }
-    if (sscanf(nwid, "%llx", (unsigned long long *)&gNetworkId) != 1 || gNetworkId == 0) {
+    unsigned long long parsed = 0;
+    if (sscanf(nwid, "%llx", &parsed) != 1 || parsed == 0) {
         LogFormat("ZT-LDN: invalid network id");
         return -1;
     }
+    gNetworkId = (uint64_t)parsed;
     if (!read_line(PeerFile, gPeerIp, sizeof(gPeerIp))) {
         LogFormat("ZT-LDN: missing %s", PeerFile);
         return -1;
@@ -55,15 +56,11 @@ int init() {
         LogFormat("ZT-LDN: node_start rc=%d", rc);
         return rc;
     }
-
-    for (int i = 0; i < 300 && !zts_node_is_online(); ++i) {
-        zts_util_delay(100);
-    }
+    for (int i = 0; i < 300 && !zts_node_is_online(); ++i) zts_util_delay(100);
     if (!zts_node_is_online()) {
         LogFormat("ZT-LDN: node stayed offline");
         return -1;
     }
-
     LogFormat("ZT-LDN: node=%010llx ONLINE", (unsigned long long)zts_node_get_id());
 
     rc = zts_net_join(gNetworkId);
@@ -71,9 +68,7 @@ int init() {
         LogFormat("ZT-LDN: net_join rc=%d", rc);
         return rc;
     }
-    for (int i = 0; i < 300 && !zts_net_transport_is_ready(gNetworkId); ++i) {
-        zts_util_delay(100);
-    }
+    for (int i = 0; i < 300 && !zts_net_transport_is_ready(gNetworkId); ++i) zts_util_delay(100);
     if (!zts_net_transport_is_ready(gNetworkId)) {
         LogFormat("ZT-LDN: network not ready");
         return -1;
@@ -82,28 +77,22 @@ int init() {
         LogFormat("ZT-LDN: failed to get assigned IPv4");
         return -1;
     }
-
     gStarted = true;
     LogFormat("ZT-LDN: network=%016llx local=%s peer=%s", (unsigned long long)gNetworkId, gLocalIp, gPeerIp);
     return 0;
 }
 
-int socket(int family, int type, int protocol) {
-    return zts_bsd_socket(family, type, protocol);
-}
+int socket(int family, int type, int protocol) { return zts_bsd_socket(family, type, protocol); }
 
 int bind(int fd, const sockaddr_in *addr) {
-    char ip[ZTS_INET_ADDRSTRLEN] = "0.0.0.0";
     unsigned short port = ntohs(addr->sin_port);
     zts_sockaddr zaddr{};
     zts_socklen_t zlen = sizeof(zaddr);
-    if (zts_util_ipstr_to_saddr(ip, port, &zaddr, &zlen) != ZTS_ERR_OK) return -1;
+    if (zts_util_ipstr_to_saddr("0.0.0.0", port, &zaddr, &zlen) != ZTS_ERR_OK) return -1;
     return zts_bsd_bind(fd, &zaddr, zlen);
 }
 
-int listen(int fd, int backlog) {
-    return zts_bsd_listen(fd, backlog);
-}
+int listen(int fd, int backlog) { return zts_bsd_listen(fd, backlog); }
 
 int accept(int fd) {
     zts_sockaddr addr{};
@@ -112,29 +101,20 @@ int accept(int fd) {
 }
 
 int connect(int fd, const sockaddr_in *addr) {
-    (void)addr;
     return zts_connect(fd, gPeerIp, ntohs(addr->sin_port), 5000);
 }
 
-int close(int fd) {
-    return zts_bsd_close(fd);
-}
-
-ssize_t send(int fd, const void *buf, size_t len) {
-    return zts_bsd_send(fd, buf, len, 0);
-}
+int close(int fd) { return zts_bsd_close(fd); }
+ssize_t send(int fd, const void *buf, size_t len) { return zts_bsd_send(fd, buf, len, 0); }
 
 ssize_t sendto(int fd, const void *buf, size_t len, const sockaddr_in *addr) {
-    (void)addr;
     zts_sockaddr zaddr{};
     zts_socklen_t zlen = sizeof(zaddr);
     if (zts_util_ipstr_to_saddr(gPeerIp, ntohs(addr->sin_port), &zaddr, &zlen) != ZTS_ERR_OK) return -1;
     return zts_bsd_sendto(fd, buf, len, 0, &zaddr, zlen);
 }
 
-ssize_t recv(int fd, void *buf, size_t len) {
-    return zts_bsd_recv(fd, buf, len, 0);
-}
+ssize_t recv(int fd, void *buf, size_t len) { return zts_bsd_recv(fd, buf, len, 0); }
 
 int poll(PollFd *fds, size_t nfds, int timeout_ms) {
     zts_pollfd local[nfds];
