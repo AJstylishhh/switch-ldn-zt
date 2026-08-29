@@ -36,3 +36,9 @@ int local_ip_host_order(uint32_t *out);
 uint32_t peer_ip_host_order();
 
 }
+
+#define ZT_POLLIN ztbridge::ZT_POLLIN
+#define ZT_POLLPRI ztbridge::ZT_POLLPRI
+#define ZT_POLLERR ztbridge::ZT_POLLERR
+#define ZT_POLLNVAL ztbridge::ZT_POLLNVAL
+#define ZT_POLLHUP ztbridge::ZT_POLLHUP
