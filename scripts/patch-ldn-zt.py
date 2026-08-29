@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+from pathlib import Path
+import shutil
+
+ROOT = Path(__file__).resolve().parents[1]
+LDN = ROOT / "ldn_mitm" / "ldn_mitm"
+SRC = LDN / "source"
+ZT_INC = ROOT / "third_party" / "libzt" / "include"
+ZT_LIB = ROOT / "third_party" / "libzt" / "lib"
+
+
+def replace(path, old, new):
+    text = path.read_text()
+    if old not in text:
+        raise SystemExit(f"patch anchor missing: {path}: {old[:80]!r}")
+    path.write_text(text.replace(old, new, 1))
+
+
+def main():
+    if not (ZT_INC / "ZeroTierSockets.h").is_file():
+        raise SystemExit("libzt headers missing")
+    if not (ZT_LIB / "libzt.a").is_file():
+        raise SystemExit("libzt.a missing")
+
+    shutil.copy2(ROOT / "scripts" / "zt_bridge.hpp", SRC / "zt_bridge.hpp")
+    shutil.copy2(ROOT / "scripts" / "zt_bridge.cpp", SRC / "zt_bridge.cpp")
+
+    lp = SRC / "lan_protocol.cpp"
+    replace(lp,
+        '#include <stratosphere.hpp>\n',
+        '#include <stratosphere.hpp>\n#include "zt_bridge.hpp"\n')
+    old_poll = '''    struct pollfd pfds[nfds];
+    for (size_t i = 0; i < nfds; i++) {
+        pfds[i].fd = fds[i] ? fds[i]->getFd() : -1;
+        pfds[i].events = POLLIN;
+        pfds[i].revents = 0;
+    }
+    int rc = poll(pfds, nfds, timeout);'''
+    new_poll = '''    ztbridge::PollFd pfds[nfds];
+    for (size_t i = 0; i < nfds; i++) {
+        pfds[i].fd = fds[i] ? fds[i]->getFd() : -1;
+        pfds[i].events = ZT_POLLIN;
+        pfds[i].revents = 0;
+    }
+    int rc = ztbridge::poll(pfds, nfds, timeout);'''
+    replace(lp, old_poll, new_poll)
+    replace(lp,
+        '        const struct pollfd &pfd = pfds[i];',
+        '        const ztbridge::PollFd &pfd = pfds[i];')
+    replace(lp,
+        'if (pfd.revents & (POLLERR | POLLHUP))',
+        'if (pfd.revents & (ZT_POLLERR | ZT_POLLHUP | ZT_POLLNVAL))')
+    replace(lp,
+        'else if (pfd.revents & (POLLIN | POLLPRI))',
+        'else if (pfd.revents & (ZT_POLLIN | ZT_POLLPRI))')
+    replace(lp, '        ::close(this->fd);', '        ztbridge::close(this->fd);')
+    replace(lp,
+        '    auto rc = ::recvfrom(this->fd, buf, len, 0, nullptr, 0);',
+        '    auto rc = ztbridge::recv(this->fd, buf, len);')
+    replace(lp,
+        '    return ::sendto(this->fd, buf, len, 0, nullptr, 0);',
+        '    return ztbridge::send(this->fd, buf, len);')
+    replace(lp,
+        '    socklen_t addr_len = sizeof(*addr);\n    return ::recvfrom(this->fd, buf, len, 0, (struct sockaddr *)addr, &addr_len);',
+        '    AMS_UNUSED(addr);\n    return ztbridge::recv(this->fd, buf, len);')
+    replace(lp,
+        '    return ::sendto(this->fd, buf, len, 0, (struct sockaddr *)addr, sizeof(*addr));',
+        '    return ztbridge::sendto(this->fd, buf, len, addr);')
+
+    ld = SRC / "lan_discovery.cpp"
+    replace(ld, '#include "ipinfo.hpp"\n', '#include "ipinfo.hpp"\n#include "zt_bridge.hpp"\n')
+    replace(ld,
+        '            int new_fd = accept(this->getFd(), (struct sockaddr *)&addr, &addrlen);',
+        '            int new_fd = ztbridge::accept(this->getFd());')
+    replace(ld, '            close(new_fd);', '            ztbridge::close(new_fd);')
+    replace(ld,
+        '    u32 address, netmask, gateway, primary_dns, secondary_dns;\n    Result rc = nifmGetCurrentIpConfigInfo(&address, &netmask, &gateway, &primary_dns, &secondary_dns);\n    address = ntohl(address);\n    netmask = ntohl(netmask);\n    if (R_FAILED(rc)) {\n        LogFormat("Broadcast failed to get ip");\n        return 0xFFFFFFFF;\n    }\n    u32 ret = address | ~netmask;\n    return ret;',
+        '    return ztbridge::peer_ip_host_order();')
+    replace(ld,
+        '            rc = setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &b, sizeof(b));\n            if (rc != 0) {\n                return MAKERESULT(ModuleID, 4);\n            }',
+        '            rc = 0;')
+    replace(ld,
+        '            rc = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));',
+        '            rc = 0;')
+    replace(ld, '        fd = ::socket(AF_INET, SOCK_STREAM, 0);', '        fd = ztbridge::socket(AF_INET, SOCK_STREAM, 0);')
+    replace(ld,
+        '            if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {',
+        '            if (ztbridge::bind(fd, &addr) != 0) {')
+    replace(ld, '            if (listen(fd, 10) != 0) {', '            if (ztbridge::listen(fd, 10) != 0) {')
+    replace(ld, '        fd = ::socket(AF_INET, SOCK_DGRAM, 0);', '        fd = ztbridge::socket(AF_INET, SOCK_DGRAM, 0);')
+    replace(ld,
+        '            if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {',
+        '            if (ztbridge::bind(fd, &addr) != 0) {')
+    replace(ld,
+        '        int ret = ::connect(this->tcp->getFd(), (struct sockaddr *)&addr, sizeof(addr));',
+        '        int ret = ztbridge::connect(this->tcp->getFd(), &addr);')
+    replace(ld,
+        '        Result rc = nifmGetCurrentIpAddress(&ipAddress);\n        if (R_FAILED(rc))\n        {\n            return rc;\n        }\n        ipAddress = ntohl(ipAddress);',
+        '        Result rc = ztbridge::local_ip_host_order(&ipAddress);\n        if (R_FAILED(rc)) {\n            return rc;\n        }')
+    replace(ld,
+        '        Result rc = nifmGetCurrentIpAddress(&ip);\n        if (R_SUCCEEDED(rc)) {\n            ip = ntohl(ip);\n            memcpy(mac->raw + 2, &ip, sizeof(ip));\n        }\n\n        return rc;',
+        '        Result rc = ztbridge::local_ip_host_order(&ip);\n        if (R_SUCCEEDED(rc)) {\n            memcpy(mac->raw + 2, &ip, sizeof(ip));\n        }\n        return rc;')
+    replace(ld,
+        '        return MAKERESULT(ModuleID, 32);\n    }\n\n    Result LANDiscovery::finalize()',
+        '        return MAKERESULT(ModuleID, 32);\n    }\n\n    Result LANDiscovery::finalize()')
+
+    li = SRC / "ldn_icommunication.cpp"
+    replace(li,
+        '#include <arpa/inet.h>\n',
+        '#include <arpa/inet.h>\n#include "zt_bridge.hpp"\n')
+    replace(li,
+        '        R_TRY(lanDiscovery.initialize([&](){',
+        '        R_TRY(ztbridge::init());\n\n        R_TRY(lanDiscovery.initialize([&](){')
+    replace(li,
+        '        Result rc = nifmGetCurrentIpConfigInfo(address.GetPointer(), netmask.GetPointer(), &gateway, &primary_dns, &secondary_dns);\n\n        address.SetValue(ntohl(address.GetValue()));\n        netmask.SetValue(ntohl(netmask.GetValue()));',
+        '        u32 ztAddress = 0;\n        Result rc = ztbridge::local_ip_host_order(&ztAddress);\n        if (R_FAILED(rc)) {\n            return rc;\n        }\n        address.SetValue(ztAddress);\n        netmask.SetValue(0xFFFFFFFF);')
+
+    mk = LDN / "Makefile"
+    text = mk.read_text()
+    if 'third_party/libzt' not in text:
+        text = text.replace('CXXFLAGS\t+= $(VERSION_DEFINES)\n', 'CXXFLAGS\t+= $(VERSION_DEFINES)\nINCLUDES += ../../third_party/libzt/include\nLIBDIRS += ../../third_party/libzt/lib\nLIBS += -lzt\n')
+        mk.write_text(text)
+
+    print("LDN ZeroTier patch applied")
+
+if __name__ == '__main__':
+    main()
