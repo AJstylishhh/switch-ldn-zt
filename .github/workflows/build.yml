@@ -14,19 +14,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Verify checked-out sources
         run: |
           set -eu
           echo "Commit: $(git rev-parse HEAD)"
-          echo "LWIP patch script:"
-          sha256sum scripts/patch-lwip-switch-thread.py
-          python3 -m py_compile scripts/patch-lwip-switch-thread.py
-          if grep -n 'nonlocal changed' scripts/patch-lwip-switch-thread.py; then
-            echo 'ERROR: stale nonlocal changed code is present in the checked-out script.'
-            exit 1
-          fi
-          echo 'LWIP patch script syntax/stale-code check: OK'
+          echo "libzt submodule: $(git -C libzt rev-parse HEAD)"
+          test "$(git -C libzt rev-parse HEAD)" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
+          test -f libzt/CMakeLists.txt
+          test -f libzt/ext/ZeroTierOne/node/Node.cpp
+          test -f libzt/ext/endian.h
 
       - name: Verify devkitA64
         run: |
@@ -39,53 +38,6 @@ jobs:
           aarch64-none-elf-g++ --version
           test "$(aarch64-none-elf-gcc -dumpmachine)" = "aarch64-none-elf"
 
-      - name: Clone upstream libzt
-        run: |
-          set -eu
-          git clone --depth 1 --recurse-submodules https://github.com/zerotier/libzt.git
-
-      - name: Prepare Switch compatibility headers
-        working-directory: libzt
-        run: |
-          set -eu
-          mkdir -p ext/arpa
-          printf '%s\n' '#pragma once' '#define __LITTLE_ENDIAN 1234' '#define __BIG_ENDIAN 4321' '#define __BYTE_ORDER __LITTLE_ENDIAN' > ext/endian.h
-          printf '%s\n' '#pragma once' '#include <sys/socket.h>' '#include <netinet/in.h' > ext/arpa/inet.h
-
-      - name: Patch libzt for Switch
-        run: |
-          set -eu
-          python3 scripts/patch-libzt-switch-bootstrap.py
-
-      - name: Patch remaining Switch portability gaps
-        run: |
-          set -eu
-          python3 scripts/patch-switch-phy.py
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('libzt/ext/ZeroTierOne/osdep/OSUtils.cpp')
-          s = p.read_text()
-          needle = '#include <sys/uio.h>'
-          wrapped = '#ifndef __SWITCH__\n#include <sys/uio.h>\n#endif'
-          if wrapped not in s:
-              if s.count(needle) != 1:
-                  raise SystemExit(f'Expected exactly one sys/uio.h include in {p}, found {s.count(needle)}')
-              s = s.replace(needle, wrapped, 1)
-              p.write_text(s)
-          print('OSUtils.cpp sys/uio.h guard: OK')
-          PY
-
-          python3 scripts/restore-zt-udp-checksum.py
-          python3 scripts/patch-incoming-auth-trace.py
-
-          echo 'Using checked-out lwIP patch script:'
-          sha256sum scripts/patch-lwip-switch-thread.py
-          python3 -m py_compile scripts/patch-lwip-switch-thread.py
-          ! grep -q 'nonlocal changed' scripts/patch-lwip-switch-thread.py
-          python3 scripts/patch-lwip-switch-thread.py
-
-          python3 scripts/patch-zt-upstream-keepalive.py
-
       - name: Configure libzt
         working-directory: libzt
         run: |
@@ -94,6 +46,7 @@ jobs:
           export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
           cmake -S . -B build-switch \
             -DCMAKE_TOOLCHAIN_FILE=/__w/switch-ldn-zt/switch-ldn-zt/cmake/switch.toolchain.cmake \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_STATIC_LIB=ON \
             -DBUILD_SHARED_LIB=OFF \
