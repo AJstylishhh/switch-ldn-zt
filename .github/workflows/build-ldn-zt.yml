@@ -26,14 +26,14 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE/ldn_mitm/Atmosphere-libs"
           git config --global --add safe.directory "$GITHUB_WORKSPACE/libzt"
 
-      - name: Use Atmosphere-libs for AMS 1.11.2 / HOS 22.5.0
+      - name: Use Atmosphere-libs master for AMS 1.11.2 / HOS 22.5.0
         working-directory: ldn_mitm/Atmosphere-libs
         run: |
           set -eu
-          AMS_LIBS_COMMIT="edb2cca26f658ef7863eb4c349399d273aab4fae"
-          git fetch --depth=1 origin "$AMS_LIBS_COMMIT"
-          git checkout --detach "$AMS_LIBS_COMMIT"
-          test "$(git rev-parse HEAD)" = "$AMS_LIBS_COMMIT"
+          git fetch --depth=1 origin master
+          git checkout master
+          git reset --hard origin/master
+          test "$(git rev-parse HEAD)" = "edb2cca26f658ef7863eb4c349399d273aab4fae"
           grep -q 'ATMOSPHERE_RELEASE_VERSION_MICRO    2' libvapours/include/vapours/ams/ams_api_version.h
           grep -q 'ATMOSPHERE_SUPPORTED_HOS_VERSION_MINOR 5' libvapours/include/vapours/ams/ams_api_version.h
           echo "Atmosphere-libs: $(git rev-parse HEAD)"
