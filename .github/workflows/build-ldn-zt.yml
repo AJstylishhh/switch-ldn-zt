@@ -23,7 +23,21 @@ jobs:
           set -eu
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$GITHUB_WORKSPACE/ldn_mitm"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/ldn_mitm/Atmosphere-libs"
           git config --global --add safe.directory "$GITHUB_WORKSPACE/libzt"
+
+      - name: Use Atmosphere-libs for AMS 1.11.2 / HOS 22.5.0
+        working-directory: ldn_mitm/Atmosphere-libs
+        run: |
+          set -eu
+          AMS_LIBS_COMMIT="edb2cca26f658ef7863eb4c349399d273aab4fae"
+          git fetch --depth=1 origin "$AMS_LIBS_COMMIT"
+          git checkout --detach "$AMS_LIBS_COMMIT"
+          test "$(git rev-parse HEAD)" = "$AMS_LIBS_COMMIT"
+          grep -q 'ATMOSPHERE_RELEASE_VERSION_MICRO    2' libvapours/include/vapours/ams/ams_api_version.h
+          grep -q 'ATMOSPHERE_SUPPORTED_HOS_VERSION_MINOR 5' libvapours/include/vapours/ams/ams_api_version.h
+          echo "Atmosphere-libs: $(git rev-parse HEAD)"
+          echo "Configured for Atmosphere 1.11.2 / HOS 22.5.0"
 
       - name: Verify pinned baseline
         run: |
@@ -32,6 +46,7 @@ jobs:
           test "$(git -C ldn_mitm rev-parse HEAD)" = "9a2639eff5b2e60065be3dfae69c46de6c3d7648"
           echo "libzt: $(git -C libzt rev-parse HEAD)"
           echo "ldn_mitm: $(git -C ldn_mitm rev-parse HEAD)"
+          echo "Atmosphere-libs: $(git -C ldn_mitm/Atmosphere-libs rev-parse HEAD)"
 
       - name: Configure libzt for Switch
         working-directory: libzt
