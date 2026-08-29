@@ -1,0 +1,94 @@
+name: Build LDN over ZeroTier prototype
+
+on:
+  push:
+    branches: ["feature/ldn-zt-transport-v2"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-ldn-zt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container: devkitpro/devkita64:latest
+    steps:
+      - name: Checkout project and pinned ldn_mitm
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Configure Git safe directories
+        run: |
+          set -eu
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/ldn_mitm"
+
+      - name: Verify pinned sources
+        run: |
+          set -eu
+          echo "Project: $(git rev-parse HEAD)"
+          echo "ldn_mitm: $(git -C ldn_mitm rev-parse HEAD)"
+          test "$(git -C ldn_mitm rev-parse HEAD)" = "9a2639eff5b2e60065be3dfae69c46de6c3d7648"
+
+      - name: Verify devkitA64
+        run: |
+          set -eu
+          export DEVKITA64=/opt/devkitpro/devkitA64
+          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
+          test -x "$DEVKITA64/bin/aarch64-none-elf-gcc"
+          test -x "$DEVKITA64/bin/aarch64-none-elf-g++"
+          test "$(aarch64-none-elf-gcc -dumpmachine)" = "aarch64-none-elf"
+
+      - name: Clone hardware-verified Switch libzt
+        run: |
+          set -eu
+          LIBZT_SHA="76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
+          git clone https://github.com/nx-mod/libzt-nx.git libzt
+          git -C libzt checkout --detach "$LIBZT_SHA"
+          echo "libzt-nx: $(git -C libzt rev-parse HEAD)"
+          test "$(git -C libzt rev-parse HEAD)" = "$LIBZT_SHA"
+          test -f libzt/CMakeLists.txt
+          test -f libzt/ext/ZeroTierOne/node/Node.cpp
+          test -f libzt/ext/endian.h
+
+          export DEVKITA64=/opt/devkitpro/devkitA64
+          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
+          cmake -S libzt -B libzt/build-switch \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/switch.toolchain.cmake" \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_STATIC_LIB=ON -DBUILD_SHARED_LIB=OFF \
+            -DBUILD_HOST_EXAMPLES=OFF -DBUILD_HOST_SELFTEST=OFF -DALLOW_INSTALL_TARGET=OFF \
+            -DZTS_DISABLE_CENTRAL_API=ON -DSWITCH=ON \
+            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I$GITHUB_WORKSPACE/libzt/ext -I$GITHUB_WORKSPACE/libzt/ext/lwip-contrib/ports/unix/port/include" \
+            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I$GITHUB_WORKSPACE/libzt/ext -I$GITHUB_WORKSPACE/libzt/ext/lwip-contrib/ports/unix/port/include"
+          cmake --build libzt/build-switch --target zt-static --parallel 2
+
+          rm -rf third_party/libzt
+          mkdir -p third_party/libzt/include third_party/libzt/lib
+          cp libzt/include/ZeroTierSockets.h third_party/libzt/include/
+          cp "$(find libzt/build-switch -type f -name libzt.a | head -1)" third_party/libzt/lib/libzt.a
+          test -s third_party/libzt/lib/libzt.a
+
+      - name: Patch ldn_mitm for ZeroTier transport
+        run: |
+          set -eu
+          python3 scripts/patch-ldn-mitm-zt.py
+          python3 scripts/patch-ldn-mitm-build.py
+          grep -n "zts_bsd_poll\|zts_bsd_socket\|zt_bridge::ipv4_address" ldn_mitm/ldn_mitm/source/lan_protocol.cpp ldn_mitm/ldn_mitm/source/lan_discovery.cpp ldn_mitm/ldn_mitm/source/ldn_icommunication.cpp
+          grep -n "third_party/libzt" ldn_mitm/ldn_mitm/Makefile
+
+      - name: Build ldn_mitm NSP
+        run: |
+          set -eu
+          make -C ldn_mitm
+          test -s ldn_mitm/ldn_mitm/ldn_mitm.nsp
+          ls -lh ldn_mitm/ldn_mitm/ldn_mitm.nsp
+
+      - name: Upload LDN prototype
+        uses: actions/upload-artifact@v4
+        with:
+          name: ldn-zt-prototype
+          path: ldn_mitm/ldn_mitm/ldn_mitm.nsp
+          retention-days: 14
