@@ -38,11 +38,8 @@ jobs:
         run: |
           set -eu
           LIBZT_SHA="76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
-          git clone --depth 1 https://github.com/nx-mod/libzt-nx.git libzt
-          if [ "$(git -C libzt rev-parse HEAD)" != "$LIBZT_SHA" ]; then
-            git -C libzt fetch --depth 1 origin "$LIBZT_SHA"
-            git -C libzt checkout --detach "$LIBZT_SHA"
-          fi
+          git clone https://github.com/nx-mod/libzt-nx.git libzt
+          git -C libzt checkout --detach "$LIBZT_SHA"
           echo "libzt-nx: $(git -C libzt rev-parse HEAD)"
           test "$(git -C libzt rev-parse HEAD)" = "$LIBZT_SHA"
           test -f libzt/CMakeLists.txt
@@ -79,7 +76,7 @@ jobs:
       - name: Build ldn_mitm NSP
         run: |
           set -eu
-          make -C ldn_mitm ldn_mitm
+          make -C ldn_mitm
           test -s ldn_mitm/ldn_mitm/ldn_mitm.nsp
           ls -lh ldn_mitm/ldn_mitm/ldn_mitm.nsp
 
