@@ -39,6 +39,8 @@ jobs:
           set -eu
           export DEVKITA64=/opt/devkitpro/devkitA64
           export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
+          SWITCH_DEFS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1"
+          SWITCH_INCLUDES="-I$GITHUB_WORKSPACE/libzt/ext -I$GITHUB_WORKSPACE/libzt/ext/lwip-contrib/ports/unix/port/include"
           cmake -S . -B build-switch \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/switch.toolchain.cmake" \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -46,8 +48,8 @@ jobs:
             -DBUILD_STATIC_LIB=ON -DBUILD_SHARED_LIB=OFF \
             -DBUILD_HOST_EXAMPLES=OFF -DBUILD_HOST_SELFTEST=OFF -DALLOW_INSTALL_TARGET=OFF \
             -DZTS_DISABLE_CENTRAL_API=ON -DSWITCH=ON \
-            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I$GITHUB_WORKSPACE/libzt/ext -I$GITHUB_WORKSPACE/libzt/ext/lwip-contrib/ports/unix/port/include" \
-            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I$GITHUB_WORKSPACE/libzt/ext -I$GITHUB_WORKSPACE/libzt/ext/lwip-contrib/ports/unix/port/include"
+            -DCMAKE_C_FLAGS="$SWITCH_DEFS $SWITCH_INCLUDES" \
+            -DCMAKE_CXX_FLAGS="$SWITCH_DEFS $SWITCH_INCLUDES"
           cmake --build build-switch --target zt-static --parallel 2
 
       - name: Stage libzt for ldn_mitm
