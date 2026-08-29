@@ -1,0 +1,85 @@
+name: Build LDN over ZeroTier
+
+on:
+  push:
+    branches: ["feature/ldn-from-green-baseline"]
+  workflow_dispatch:
+
+jobs:
+  build-ldn-zt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container: devkitpro/devkita64:latest
+
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Configure Git workspace
+        run: |
+          set -eu
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/ldn_mitm"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/libzt"
+
+      - name: Verify pinned baseline
+        run: |
+          set -eu
+          test "$(git -C libzt rev-parse HEAD)" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
+          test "$(git -C ldn_mitm rev-parse HEAD)" = "9a2639eff5b2e60065be3dfae69c46de6c3d7648"
+          echo "libzt: $(git -C libzt rev-parse HEAD)"
+          echo "ldn_mitm: $(git -C ldn_mitm rev-parse HEAD)"
+
+      - name: Configure libzt for Switch
+        working-directory: libzt
+        run: |
+          set -eu
+          export DEVKITA64=/opt/devkitpro/devkitA64
+          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
+          cmake -S . -B build-switch \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/switch.toolchain.cmake" \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_STATIC_LIB=ON -DBUILD_SHARED_LIB=OFF \
+            -DBUILD_HOST_EXAMPLES=OFF -DBUILD_HOST_SELFTEST=OFF -DALLOW_INSTALL_TARGET=OFF \
+            -DZTS_DISABLE_CENTRAL_API=ON -DSWITCH=ON \
+            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I$GITHUB_WORKSPACE/libzt/ext -I$GITHUB_WORKSPACE/libzt/ext/lwip-contrib/ports/unix/port/include" \
+            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I$GITHUB_WORKSPACE/libzt/ext -I$GITHUB_WORKSPACE/libzt/ext/lwip-contrib/ports/unix/port/include"
+          cmake --build build-switch --target zt-static --parallel 2
+
+      - name: Stage libzt for ldn_mitm
+        run: |
+          set -eu
+          rm -rf third_party/libzt
+          mkdir -p third_party/libzt/include third_party/libzt/lib
+          cp libzt/include/ZeroTierSockets.h third_party/libzt/include/
+          cp "$(find libzt/build-switch -type f -name libzt.a | head -1)" third_party/libzt/lib/libzt.a
+          test -s third_party/libzt/lib/libzt.a
+
+      - name: Apply LDN ZeroTier transport
+        run: |
+          set -eu
+          python3 scripts/patch-ldn-zt-transport.py
+          python3 scripts/patch-ldn-zt-address-helper.py
+          grep -n "zts_bsd_poll\|zts_bsd_recvfrom\|zts_bsd_sendto" ldn_mitm/ldn_mitm/source/lan_protocol.cpp
+          grep -n "zts_bsd_socket\|zts_bsd_bind\|zts_bsd_accept" ldn_mitm/ldn_mitm/source/lan_discovery.cpp
+          grep -n "zt_ldn_initialize" ldn_mitm/ldn_mitm/source/ldnmitm_main.cpp
+          grep -n "third_party/libzt" ldn_mitm/ldn_mitm/Makefile
+
+      - name: Build LDN NSP
+        run: |
+          set -eu
+          make -C ldn_mitm clean
+          make -C ldn_mitm
+          test -s ldn_mitm/ldn_mitm/ldn_mitm.nsp
+          ls -lh ldn_mitm/ldn_mitm/ldn_mitm.nsp
+
+      - name: Upload LDN NSP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ldn-zt-prototype
+          path: ldn_mitm/ldn_mitm/ldn_mitm.nsp
+          retention-days: 14
