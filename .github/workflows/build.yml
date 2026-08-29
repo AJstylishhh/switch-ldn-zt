@@ -45,7 +45,6 @@ jobs:
           export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
           cmake -S . -B build-switch \
             -DCMAKE_TOOLCHAIN_FILE=/__w/switch-ldn-zt/switch-ldn-zt/cmake/switch.toolchain.cmake \
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_STATIC_LIB=ON \
             -DBUILD_SHARED_LIB=OFF \
