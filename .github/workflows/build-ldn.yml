@@ -1,0 +1,55 @@
+name: Build LDN sysmodule
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ldn_mitm/**'
+      - '.gitmodules'
+      - '.github/workflows/build-ldn.yml'
+  workflow_dispatch:
+
+jobs:
+  build-ldn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container: devkitpro/devkita64:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Verify pinned sources
+        run: |
+          set -eu
+          test "$(git -C ldn_mitm rev-parse HEAD)" = "511e3026afe0dfe42f43b7b231872e4df6167bbe"
+          test -f ldn_mitm/ldn_mitm/Makefile
+          test -f ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk
+
+      - name: Build ldn_mitm sysmodule
+        working-directory: ldn_mitm/ldn_mitm
+        run: |
+          set -eu
+          make clean || true
+          make -j2
+          test -s ldn_mitm.nsp
+          ls -lh ldn_mitm.nsp
+
+      - name: Package sysmodule
+        run: |
+          set -eu
+          mkdir -p dist/atmosphere/contents/4200000000000010
+          cp ldn_mitm/ldn_mitm/ldn_mitm.nsp dist/atmosphere/contents/4200000000000010/exefs.nsp
+          test -s dist/atmosphere/contents/4200000000000010/exefs.nsp
+          cd dist
+          zip -r ../ldn-mitm-sysmodule.zip atmosphere
+
+      - name: Upload LDN sysmodule
+        uses: actions/upload-artifact@v4
+        with:
+          name: ldn-mitm-sysmodule
+          path: ldn-mitm-sysmodule.zip
+          retention-days: 14
