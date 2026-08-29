@@ -18,6 +18,12 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
+      - name: Configure Git safe directories
+        run: |
+          set -eu
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/ldn_mitm"
+
       - name: Verify pinned sources
         run: |
           set -eu
