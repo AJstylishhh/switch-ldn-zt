@@ -37,11 +37,14 @@ jobs:
       - name: Clone hardware-verified Switch libzt
         run: |
           set -eu
+          LIBZT_SHA="76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
           git clone --depth 1 https://github.com/nx-mod/libzt-nx.git libzt
-          git -C libzt fetch --depth 1 origin 76c138b
-          git -C libzt checkout --detach 76c138b
+          if [ "$(git -C libzt rev-parse HEAD)" != "$LIBZT_SHA" ]; then
+            git -C libzt fetch --depth 1 origin "$LIBZT_SHA"
+            git -C libzt checkout --detach "$LIBZT_SHA"
+          fi
           echo "libzt-nx: $(git -C libzt rev-parse HEAD)"
-          test "$(git -C libzt rev-parse HEAD)" = "76c138b"
+          test "$(git -C libzt rev-parse HEAD)" = "$LIBZT_SHA"
           test -f libzt/CMakeLists.txt
           test -f libzt/ext/ZeroTierOne/node/Node.cpp
           test -f libzt/ext/endian.h
