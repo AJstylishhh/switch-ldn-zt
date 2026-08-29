@@ -1,0 +1,3 @@
+[submodule "ldn_mitm"]
+	path = ldn_mitm
+	url = https://github.com/spacemeowx2/ldn_mitm.git
