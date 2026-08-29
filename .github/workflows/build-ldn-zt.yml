@@ -31,8 +31,7 @@ jobs:
         run: |
           set -eu
           git fetch --depth=1 origin master
-          git checkout master
-          git reset --hard origin/master
+          git checkout -B master origin/master
           test "$(git rev-parse HEAD)" = "edb2cca26f658ef7863eb4c349399d273aab4fae"
           grep -q 'ATMOSPHERE_RELEASE_VERSION_MICRO    2' libvapours/include/vapours/ams/ams_api_version.h
           grep -q 'ATMOSPHERE_SUPPORTED_HOS_VERSION_MINOR 5' libvapours/include/vapours/ams/ams_api_version.h
@@ -89,7 +88,10 @@ jobs:
       - name: Build LDN NSP
         run: |
           set -eu
-          make -C ldn_mitm clean
+          # Do NOT run `make clean` here. The ldn_mitm top-level Makefile
+          # declares `clean` as depending on PACK, so `make clean` attempts
+          # to package outputs that it has just deleted and fails with a
+          # misleading missing ldnmitm_config.nro error.
           make -C ldn_mitm
           test -s ldn_mitm/ldn_mitm/ldn_mitm.nsp
           ls -lh ldn_mitm/ldn_mitm/ldn_mitm.nsp
