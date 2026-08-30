@@ -7,6 +7,7 @@ on:
       - 'ldn_mitm/**'
       - 'scripts/patch-ldn-zt.py'
       - 'scripts/zt_bridge.*'
+      - 'scripts/errno_compat.c'
       - '.gitmodules'
       - '.github/workflows/build-ldn.yml'
   workflow_dispatch:
@@ -35,6 +36,7 @@ jobs:
           test -f scripts/patch-ldn-zt.py
           test -f scripts/zt_bridge.cpp
           test -f scripts/zt_bridge.hpp
+          test -f scripts/errno_compat.c
 
       - name: Build libzt for Switch
         working-directory: libzt
@@ -65,6 +67,7 @@ jobs:
           set -eu
           python3 scripts/patch-ldn-zt.py
           test -f ldn_mitm/ldn_mitm/source/zt_bridge.cpp
+          test -f ldn_mitm/ldn_mitm/source/errno_compat.c
           grep -q 'ztbridge::poll' ldn_mitm/ldn_mitm/source/lan_protocol.cpp
           grep -q 'ztbridge::connect' ldn_mitm/ldn_mitm/source/lan_discovery.cpp
           grep -q 'ztbridge::init' ldn_mitm/ldn_mitm/source/ldn_icommunication.cpp
@@ -110,12 +113,14 @@ jobs:
       - name: Package sysmodule and config template
         run: |
           set -eu
-          mkdir -p dist/atmosphere/contents/4200000000000010
+          mkdir -p dist/atmosphere/contents/4200000000000010/flags
           mkdir -p dist/config/switch-ldn-zt
           cp ldn_mitm/ldn_mitm/ldn_mitm.nsp dist/atmosphere/contents/4200000000000010/exefs.nsp
+          : > dist/atmosphere/contents/4200000000000010/flags/boot2.flag
           printf 'YOUR_ZEROTIER_NETWORK_ID\n' > dist/config/switch-ldn-zt/network_id.txt
           printf 'PEER_SWITCH_ZEROTIER_IP\n' > dist/config/switch-ldn-zt/peer_ip.txt
           test -s dist/atmosphere/contents/4200000000000010/exefs.nsp
+          test -f dist/atmosphere/contents/4200000000000010/flags/boot2.flag
           cd dist
           zip -r ../ldn-zt-sysmodule.zip atmosphere config
 
