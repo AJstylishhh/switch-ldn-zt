@@ -130,12 +130,16 @@ def main():
             'CXXFLAGS\t+= $(VERSION_DEFINES)\n',
             'CXXFLAGS\t+= $(VERSION_DEFINES)\n'
             f'LIBDIRS += {libzt_dir}\n'
-            'LIBS += -lzt\n'
+            'LIBS += -lzt -lnx\n'
         )
+        mk.write_text(text)
+    elif "LIBS += -lzt -lnx" not in text:
+        text = text.replace('LIBS += -lzt\n', 'LIBS += -lzt -lnx\n')
         mk.write_text(text)
 
     print("LDN ZeroTier patch applied")
     print(f"libzt Makefile directory: {libzt_dir}")
+    print("libnx linked for Switch POSIX errno/socket compatibility")
 
 if __name__ == '__main__':
     main()
