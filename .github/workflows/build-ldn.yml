@@ -25,10 +25,19 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Select known-good ldn_mitm nightly base
+        run: |
+          set -eu
+          git -C ldn_mitm fetch --no-tags origin 9a2639eff5b2e60065be3dfae69c46de6c3d7648
+          git -C ldn_mitm checkout --detach 9a2639eff5b2e60065be3dfae69c46de6c3d7648
+          git -C ldn_mitm submodule sync --recursive
+          git -C ldn_mitm submodule update --init --recursive
+
       - name: Verify pinned sources
         run: |
           set -eu
-          test "$(git -C ldn_mitm rev-parse HEAD)" = "511e3026afe0dfe42f43b7b231872e4df6167bbe"
+          test "$(git -C ldn_mitm rev-parse HEAD)" = "9a2639eff5b2e60065be3dfae69c46de6c3d7648"
+          test "$(git -C ldn_mitm rev-parse Atmosphere-libs)" = "82f1553"
           test "$(git -C libzt rev-parse HEAD)" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
           test -f ldn_mitm/ldn_mitm/Makefile
           test -f ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk
@@ -78,7 +87,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
-          key: atmosphere-libstratosphere-8e9c9ab-devkita64
+          key: atmosphere-libstratosphere-82f1553-devkita64
 
       - name: Build Atmosphere libraries
         if: steps.atmosphere-cache.outputs.cache-hit != 'true'
@@ -99,7 +108,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
-          key: atmosphere-libstratosphere-8e9c9ab-devkita64
+          key: atmosphere-libstratosphere-82f1553-devkita64
 
       - name: Build LDN ZeroTier sysmodule
         working-directory: ldn_mitm/ldn_mitm
@@ -117,10 +126,12 @@ jobs:
           mkdir -p dist/config/switch-ldn-zt
           cp ldn_mitm/ldn_mitm/ldn_mitm.nsp dist/atmosphere/contents/4200000000000010/exefs.nsp
           : > dist/atmosphere/contents/4200000000000010/flags/boot2.flag
+          cp ldn_mitm/ldn_mitm/res/toolbox.json dist/atmosphere/contents/4200000000000010/toolbox.json
           printf 'YOUR_ZEROTIER_NETWORK_ID\n' > dist/config/switch-ldn-zt/network_id.txt
           printf 'PEER_SWITCH_ZEROTIER_IP\n' > dist/config/switch-ldn-zt/peer_ip.txt
           test -s dist/atmosphere/contents/4200000000000010/exefs.nsp
           test -f dist/atmosphere/contents/4200000000000010/flags/boot2.flag
+          test -s dist/atmosphere/contents/4200000000000010/toolbox.json
           cd dist
           zip -r ../ldn-zt-sysmodule.zip atmosphere config
 
