@@ -136,6 +136,25 @@ def main():
         '        Result rc = nifmGetCurrentIpAddress(&ip);\n        if (R_SUCCEEDED(rc)) {\n            ip = ntohl(ip);\n            memcpy(mac->raw + 2, &ip, sizeof(ip));\n        }\n\n        return rc;',
         '        Result rc = ztbridge::local_ip_host_order(&ip);\n        if (R_SUCCEEDED(rc)) {\n            memcpy(mac->raw + 2, &ip, sizeof(ip));\n        }\n        return rc;')
 
+    # The upstream socket-option locals are no longer needed after the
+    # ZeroTier socket wrappers replace SO_BROADCAST/SO_REUSEADDR. Remove only
+    # those dead declarations and keep the compiler strict (-Werror).
+    text = ld.read_text()
+    text, n_addrlen = re.subn(r'^\s*socklen_t\s+addrlen\s*=\s*sizeof\(addr\);\s*\n', '', text, flags=re.MULTILINE)
+    text, n_b = re.subn(r'^\s*(?:int|bool)\s+b\s*=\s*[^;]+;\s*\n', '', text, count=1, flags=re.MULTILINE)
+    text, n_yes = re.subn(r'^\s*(?:int|bool)\s+yes\s*=\s*[^;]+;\s*\n', '', text, count=1, flags=re.MULTILINE)
+    if n_addrlen == 0 or n_b == 0 or n_yes == 0:
+        raise SystemExit(f"expected obsolete socket locals missing: addrlen={n_addrlen}, b={n_b}, yes={n_yes}")
+    # fd remains a function parameter, but after replacing both setsockopt
+    # calls it is otherwise unused. Keep the parameter for the upstream API
+    # and make that intent explicit instead of disabling -Werror.
+    if 'AMS_UNUSED(fd);' not in text:
+        marker = '            rc = 0;'
+        if marker not in text:
+            raise SystemExit("cannot mark socket fd unused")
+        text = text.replace(marker, '            AMS_UNUSED(fd);\n' + marker, 1)
+    ld.write_text(text)
+
     li = SRC / "ldn_icommunication.cpp"
     replace(li,
         '#include <arpa/inet.h>\n',
