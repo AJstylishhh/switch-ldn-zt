@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sys/socket.h>
+#include <netinet/in.h>
 #include <stdint.h>
 #include <stddef.h>
 
