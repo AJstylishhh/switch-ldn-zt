@@ -58,6 +58,7 @@ def main():
 
     shutil.copy2(ROOT / "scripts" / "zt_bridge.hpp", SRC / "zt_bridge.hpp")
     shutil.copy2(ROOT / "scripts" / "zt_bridge.cpp", SRC / "zt_bridge.cpp")
+    shutil.copy2(ROOT / "scripts" / "errno_compat.c", SRC / "errno_compat.c")
 
     lp = SRC / "lan_protocol.cpp"
     replace(lp, '#include <stratosphere.hpp>\n', '#include <stratosphere.hpp>\n#include "zt_bridge.hpp"\n')
