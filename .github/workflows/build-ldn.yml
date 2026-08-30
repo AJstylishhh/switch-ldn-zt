@@ -70,12 +70,33 @@ jobs:
           grep -q 'ztbridge::init' ldn_mitm/ldn_mitm/source/ldn_icommunication.cpp
           grep -q 'third_party/libzt' ldn_mitm/ldn_mitm/Makefile
 
+      - name: Restore Atmosphere library cache
+        id: atmosphere-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
+          key: atmosphere-libstratosphere-8e9c9ab-devkita64
+
       - name: Build Atmosphere libraries
+        if: steps.atmosphere-cache.outputs.cache-hit != 'true'
         working-directory: ldn_mitm/Atmosphere-libs
         run: |
           set -eu
           make -C libstratosphere nx_release
           test -s libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
+
+      - name: Verify Atmosphere library
+        run: |
+          set -eu
+          test -s ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
+          ls -lh ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
+
+      - name: Save Atmosphere library cache
+        if: always() && steps.atmosphere-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
+          key: atmosphere-libstratosphere-8e9c9ab-devkita64
 
       - name: Build LDN ZeroTier sysmodule
         working-directory: ldn_mitm/ldn_mitm
