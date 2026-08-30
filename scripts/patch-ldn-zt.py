@@ -60,6 +60,17 @@ def main():
     shutil.copy2(ROOT / "scripts" / "zt_bridge.cpp", SRC / "zt_bridge.cpp")
     shutil.copy2(ROOT / "scripts" / "errno_compat.c", SRC / "errno_compat.c")
 
+    main_cpp = SRC / "ldnmitm_main.cpp"
+    replace(main_cpp,
+        '        R_ABORT_UNLESS(log::Initialize());\n        LogFormat("main");',
+        '        R_ABORT_UNLESS(log::Initialize());\n        LogFormat("LDN-ZT: Main entered");')
+    replace(main_cpp,
+        '        R_ABORT_UNLESS((mitm::g_server_manager.RegisterMitmServer<mitm::ldn::LdnMitMService>(0, MitmServiceName)));\n        LogFormat("registered");',
+        '        R_ABORT_UNLESS((mitm::g_server_manager.RegisterMitmServer<mitm::ldn::LdnMitMService>(0, MitmServiceName)));\n        LogFormat("LDN-ZT: mitm registered");')
+    replace(main_cpp,
+        '        void InitializeSystemModule() {\n            /* Initialize our connection to sm. */',
+        '        void InitializeSystemModule() {\n            LogFormat("LDN-ZT: InitializeSystemModule entered");\n            /* Initialize our connection to sm. */')
+
     lp = SRC / "lan_protocol.cpp"
     replace(lp, '#include <stratosphere.hpp>\n', '#include <stratosphere.hpp>\n#include "zt_bridge.hpp"\n')
     old_poll = '''    struct pollfd pfds[nfds];
@@ -84,7 +95,7 @@ def main():
     replace(lp, '    auto rc = ::recvfrom(this->fd, buf, len, 0, nullptr, 0);', '    auto rc = ztbridge::recv(this->fd, buf, len);')
     replace(lp, '    return ::sendto(this->fd, buf, len, 0, nullptr, 0);', '    return ztbridge::send(this->fd, buf, len);')
     replace(lp, '    socklen_t addr_len = sizeof(*addr);\n    return ::recvfrom(this->fd, buf, len, 0, (struct sockaddr *)addr, &addr_len);', '    AMS_UNUSED(addr);\n    return ztbridge::recv(this->fd, buf, len);')
-    replace(lp, '    return ::sendto(this->fd, buf, len, 0, (struct sockaddr *)addr, sizeof(*addr));', '    return ztbridge::sendto(this->fd, buf, len, addr);')
+    replace(lp, '    return ::sendto(this->fd, buf, len, 0, (struct sockaddr *)addr, sizeof(addr));', '    return ztbridge::sendto(this->fd, buf, len, addr);')
 
     ld = SRC / "lan_discovery.cpp"
     replace(ld, '#include "ipinfo.hpp"\n', '#include "ipinfo.hpp"\n#include "zt_bridge.hpp"\n')
@@ -109,7 +120,15 @@ def main():
 
     li = SRC / "ldn_icommunication.cpp"
     replace(li, '#include <arpa/inet.h>\n', '#include <arpa/inet.h>\n#include "zt_bridge.hpp"\n')
-    replace(li, '        R_TRY(lanDiscovery.initialize([&](){', '        R_TRY(ztbridge::init());\n\n        R_TRY(lanDiscovery.initialize([&](){')
+    replace(li,
+        '        R_TRY(ztbridge::init());\n\n        R_TRY(lanDiscovery.initialize([&](){',
+        '''        const int ztRc = ztbridge::init();
+        if (ztRc != 0) {
+            LogFormat("ZT-LDN: init failed rc=%d", ztRc);
+            return MAKERESULT(Module_Libnx, 1);
+        }
+
+        R_TRY(lanDiscovery.initialize([&](){''')
     replace_function(li, '    Result ICommunicationService::GetIpv4Address(sf::Out<u32> address, sf::Out<u32> netmask)', '''{
         u32 ztAddress = 0;
         Result rc = ztbridge::local_ip_host_order(&ztAddress);
@@ -141,6 +160,8 @@ def main():
     print("LDN ZeroTier patch applied")
     print(f"libzt Makefile directory: {libzt_dir}")
     print("libnx linked for Switch POSIX errno/socket compatibility")
+    print("boot diagnostics: Main entered / InitializeSystemModule entered / mitm registered")
+    print("ztbridge init is lazy and uses explicit int -> Result error handling")
 
 if __name__ == '__main__':
     main()
