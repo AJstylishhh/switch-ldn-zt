@@ -6,11 +6,6 @@
 #include <stdio.h>
 #include <string.h>
 
-/* libzt's bundled lwIP Switch port declares a global errno symbol.
- * The LDN sysmodule link does not provide that symbol, so define the
- * compatibility storage here rather than modifying the bundled lwIP source. */
-extern "C" int errno = 0;
-
 extern "C" int pipe(int fd[2]) {
     return socketpair(AF_UNIX, SOCK_STREAM, 0, fd);
 }
