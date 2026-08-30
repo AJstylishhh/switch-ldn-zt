@@ -118,11 +118,9 @@ def main():
     li = SRC / "ldn_icommunication.cpp"
     replace(li, '#include <arpa/inet.h>\n', '#include <arpa/inet.h>\n#include "zt_bridge.hpp"\n')
     replace(li,
-        '        R_TRY(ztbridge::init());\n\n        R_TRY(lanDiscovery.initialize([&](){',
-        '''        const int ztRc = ztbridge::init();
-        if (ztRc != 0) {
-            LogFormat("ZT-LDN: init failed rc=%d", ztRc);
-            return MAKERESULT(Module_Libnx, 1);
+        '        R_TRY(lanDiscovery.initialize([&](){',
+        '''        if (ztbridge::init() != 0) {
+            return MAKERESULT(0xFD, 0x50);
         }
 
         R_TRY(lanDiscovery.initialize([&](){''')
