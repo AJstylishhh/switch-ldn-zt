@@ -60,6 +60,8 @@ def main():
     shutil.copy2(ROOT / "scripts" / "zt_bridge.cpp", SRC / "zt_bridge.cpp")
     shutil.copy2(ROOT / "scripts" / "errno_compat.c", SRC / "errno_compat.c")
 
+    # Main diagnostics are emitted only after the Stratosphere logger has been
+    # initialized; this avoids introducing logging into pre-Main initialization.
     main_cpp = SRC / "ldnmitm_main.cpp"
     replace(main_cpp,
         '        R_ABORT_UNLESS(log::Initialize());\n        LogFormat("main");',
@@ -67,9 +69,6 @@ def main():
     replace(main_cpp,
         '        R_ABORT_UNLESS((mitm::g_server_manager.RegisterMitmServer<mitm::ldn::LdnMitMService>(0, MitmServiceName)));\n        LogFormat("registered");',
         '        R_ABORT_UNLESS((mitm::g_server_manager.RegisterMitmServer<mitm::ldn::LdnMitMService>(0, MitmServiceName)));\n        LogFormat("LDN-ZT: mitm registered");')
-    replace(main_cpp,
-        '        void InitializeSystemModule() {\n            /* Initialize our connection to sm. */',
-        '        void InitializeSystemModule() {\n            LogFormat("LDN-ZT: InitializeSystemModule entered");\n            /* Initialize our connection to sm. */')
 
     lp = SRC / "lan_protocol.cpp"
     replace(lp, '#include <stratosphere.hpp>\n', '#include <stratosphere.hpp>\n#include "zt_bridge.hpp"\n')
@@ -160,7 +159,7 @@ def main():
     print("LDN ZeroTier patch applied")
     print(f"libzt Makefile directory: {libzt_dir}")
     print("libnx linked for Switch POSIX errno/socket compatibility")
-    print("boot diagnostics: Main entered / InitializeSystemModule entered / mitm registered")
+    print("boot diagnostics: Main entered / mitm registered")
     print("ztbridge init is lazy and uses explicit int -> Result error handling")
 
 if __name__ == '__main__':
