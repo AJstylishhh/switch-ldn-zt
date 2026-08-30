@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 import shutil
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +23,32 @@ def replace_all(path, old, new, minimum=1):
     if count < minimum:
         raise SystemExit(f"patch anchor missing: {path}: expected at least {minimum}, found {count}: {old[:80]!r}")
     path.write_text(text.replace(old, new))
+
+
+def replace_function(path, signature, new_body):
+    text = path.read_text()
+    start = text.find(signature)
+    if start < 0:
+        raise SystemExit(f"patch function missing: {path}: {signature!r}")
+    brace = text.find("{", start)
+    if brace < 0:
+        raise SystemExit(f"patch function has no opening brace: {path}: {signature!r}")
+
+    depth = 0
+    end = None
+    for i in range(brace, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    if end is None:
+        raise SystemExit(f"patch function has unbalanced braces: {path}: {signature!r}")
+
+    replacement = signature + " " + new_body
+    path.write_text(text[:start] + replacement + text[end:])
 
 
 def main():
@@ -81,9 +108,11 @@ def main():
         '            int new_fd = accept(this->getFd(), (struct sockaddr *)&addr, &addrlen);',
         '            int new_fd = ztbridge::accept(this->getFd());')
     replace(ld, '            close(new_fd);', '            ztbridge::close(new_fd);')
-    replace(ld,
-        '    u32 address, netmask, gateway, primary_dns, secondary_dns;\n    Result rc = nifmGetCurrentIpConfigInfo(&address, &netmask, &gateway, &primary_dns, &secondary_dns);\n    address = ntohl(address);\n    netmask = ntohl(netmask);\n    if (R_FAILED(rc)) {\n        LogFormat("Broadcast failed to get ip");\n        return 0xFFFFFFFF;\n    }\n    u32 ret = address | ~netmask;\n    return ret;',
-        '    return ztbridge::peer_ip_host_order();')
+    replace_function(ld,
+        '    u32 LDUdpSocket::getBroadcast()',
+        '''{
+        return ztbridge::peer_ip_host_order();
+    }''')
     replace(ld,
         '            rc = setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &b, sizeof(b));\n            if (rc != 0) {\n                return MAKERESULT(ModuleID, 4);\n            }',
         '            rc = 0;')
