@@ -2,8 +2,13 @@
 #include "debug.hpp"
 #include <ZeroTierSockets.h>
 #include <arpa/inet.h>
+#include <sys/socket.h>
 #include <stdio.h>
 #include <string.h>
+
+extern "C" int pipe(int fd[2]) {
+    return socketpair(AF_UNIX, SOCK_STREAM, 0, fd);
+}
 
 namespace ztbridge {
 
