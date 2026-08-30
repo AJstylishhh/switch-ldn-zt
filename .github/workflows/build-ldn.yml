@@ -31,6 +31,8 @@ jobs:
           test "$(git -C libzt rev-parse HEAD)" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
           test -f ldn_mitm/ldn_mitm/Makefile
           test -f ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk
+          test -f ldn_mitm/Atmosphere-libs/libvapours/Makefile
+          test -f ldn_mitm/Atmosphere-libs/libstratosphere/Makefile
           test -f scripts/patch-ldn-zt.py
           test -f scripts/zt_bridge.cpp
           test -f scripts/zt_bridge.hpp
@@ -68,6 +70,15 @@ jobs:
           grep -q 'ztbridge::connect' ldn_mitm/ldn_mitm/source/lan_discovery.cpp
           grep -q 'ztbridge::init' ldn_mitm/ldn_mitm/source/ldn_icommunication.cpp
           grep -q 'third_party/libzt' ldn_mitm/ldn_mitm/Makefile
+
+      - name: Build Atmosphere libraries
+        working-directory: ldn_mitm/Atmosphere-libs
+        run: |
+          set -eu
+          make -C libvapours nx_release
+          make -C libstratosphere nx_release
+          test -s libvapours/lib/nintendo_nx_arm64_armv8a/release/libvapours.a
+          test -s libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
 
       - name: Build LDN ZeroTier sysmodule
         working-directory: ldn_mitm/ldn_mitm
