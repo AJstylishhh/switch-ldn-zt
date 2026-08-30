@@ -36,16 +36,26 @@ jobs:
       - name: Verify pinned sources
         run: |
           set -eu
-          test "$(git -C ldn_mitm rev-parse HEAD)" = "9a2639eff5b2e60065be3dfae69c46de6c3d7648"
-          test "$(git -C ldn_mitm rev-parse Atmosphere-libs)" = "82f1553c4c7e68364f7e630b1c68f2aee8681dee"
-          test "$(git -C libzt rev-parse HEAD)" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
-          test -f ldn_mitm/ldn_mitm/Makefile
-          test -f ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk
-          test -f ldn_mitm/Atmosphere-libs/libstratosphere/Makefile
-          test -f scripts/patch-ldn-zt.py
-          test -f scripts/zt_bridge.cpp
-          test -f scripts/zt_bridge.hpp
-          test -f scripts/errno_compat.c
+          actual="$(git -C ldn_mitm rev-parse HEAD)"
+          echo "ldn_mitm: $actual"
+          test "$actual" = "9a2639eff5b2e60065be3dfae69c46de6c3d7648"
+          actual="$(git -C ldn_mitm/Atmosphere-libs rev-parse HEAD)"
+          echo "Atmosphere-libs: $actual"
+          test "$actual" = "82f1553c4c7e68364f7e630b1c68f2aee8681dee"
+          actual="$(git -C libzt rev-parse HEAD)"
+          echo "libzt: $actual"
+          test "$actual" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
+          for f in \
+            ldn_mitm/ldn_mitm/Makefile \
+            ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk \
+            ldn_mitm/Atmosphere-libs/libstratosphere/Makefile \
+            scripts/patch-ldn-zt.py \
+            scripts/zt_bridge.cpp \
+            scripts/zt_bridge.hpp \
+            scripts/errno_compat.c; do
+            echo "checking $f"
+            test -f "$f"
+          done
 
       - name: Build libzt for Switch
         working-directory: libzt
