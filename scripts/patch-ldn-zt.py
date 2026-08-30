@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import re
 import shutil
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -110,7 +109,18 @@ def main():
     li = SRC / "ldn_icommunication.cpp"
     replace(li, '#include <arpa/inet.h>\n', '#include <arpa/inet.h>\n#include "zt_bridge.hpp"\n')
     replace(li, '        R_TRY(lanDiscovery.initialize([&](){', '        R_TRY(ztbridge::init());\n\n        R_TRY(lanDiscovery.initialize([&](){')
-    replace(li, '        Result rc = nifmGetCurrentIpConfigInfo(address.GetPointer(), netmask.GetPointer(), &gateway, &primary_dns, &secondary_dns);\n\n        address.SetValue(ntohl(address.GetValue()));\n        netmask.SetValue(ntohl(netmask.GetValue()));', '        u32 ztAddress = 0;\n        Result rc = ztbridge::local_ip_host_order(&ztAddress);\n        if (R_FAILED(rc)) {\n            return rc;\n        }\n        address.SetValue(ztAddress);\n        netmask.SetValue(0xFFFFFFFF);')
+    replace_function(li, '    Result ICommunicationService::GetIpv4Address(sf::Out<u32> address, sf::Out<u32> netmask)', '''{
+        u32 ztAddress = 0;
+        Result rc = ztbridge::local_ip_host_order(&ztAddress);
+        if (R_FAILED(rc)) {
+            return rc;
+        }
+
+        address.SetValue(ztAddress);
+        netmask.SetValue(0xFFFFFFFF);
+        LogFormat("get_ipv4_address %x %x", address.GetValue(), netmask.GetValue());
+        return rc;
+    }''')
 
     mk = LDN / "Makefile"
     text = mk.read_text()
