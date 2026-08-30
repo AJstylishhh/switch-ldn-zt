@@ -92,7 +92,6 @@ def main():
     replace(lp, '    auto rc = ::recvfrom(this->fd, buf, len, 0, nullptr, 0);', '    auto rc = ztbridge::recv(this->fd, buf, len);')
     replace(lp, '    return ::sendto(this->fd, buf, len, 0, nullptr, 0);', '    return ztbridge::send(this->fd, buf, len);')
     replace(lp, '    socklen_t addr_len = sizeof(*addr);\n    return ::recvfrom(this->fd, buf, len, 0, (struct sockaddr *)addr, &addr_len);', '    AMS_UNUSED(addr);\n    return ztbridge::recv(this->fd, buf, len);')
-    replace(lp, '    return ::sendto(this->fd, buf, len, 0, (struct sockaddr *)addr, sizeof(addr));', '    return ztbridge::sendto(this->fd, buf, len, addr);')
     replace(lp, '    return ::sendto(this->fd, buf, len, 0, (struct sockaddr *)addr, sizeof(*addr));', '    return ztbridge::sendto(this->fd, buf, len, addr);')
 
     ld = SRC / "lan_discovery.cpp"
