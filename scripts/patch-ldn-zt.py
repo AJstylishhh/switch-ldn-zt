@@ -60,8 +60,6 @@ def main():
     shutil.copy2(ROOT / "scripts" / "zt_bridge.cpp", SRC / "zt_bridge.cpp")
     shutil.copy2(ROOT / "scripts" / "errno_compat.c", SRC / "errno_compat.c")
 
-    # Main diagnostics are emitted only after the Stratosphere logger has been
-    # initialized; this avoids introducing logging into pre-Main initialization.
     main_cpp = SRC / "ldnmitm_main.cpp"
     replace(main_cpp,
         '        R_ABORT_UNLESS(log::Initialize());\n        LogFormat("main");',
@@ -95,6 +93,7 @@ def main():
     replace(lp, '    return ::sendto(this->fd, buf, len, 0, nullptr, 0);', '    return ztbridge::send(this->fd, buf, len);')
     replace(lp, '    socklen_t addr_len = sizeof(*addr);\n    return ::recvfrom(this->fd, buf, len, 0, (struct sockaddr *)addr, &addr_len);', '    AMS_UNUSED(addr);\n    return ztbridge::recv(this->fd, buf, len);')
     replace(lp, '    return ::sendto(this->fd, buf, len, 0, (struct sockaddr *)addr, sizeof(addr));', '    return ztbridge::sendto(this->fd, buf, len, addr);')
+    replace(lp, '    return ::sendto(this->fd, buf, len, 0, (struct sockaddr *)addr, sizeof(*addr));', '    return ztbridge::sendto(this->fd, buf, len, addr);')
 
     ld = SRC / "lan_discovery.cpp"
     replace(ld, '#include "ipinfo.hpp"\n', '#include "ipinfo.hpp"\n#include "zt_bridge.hpp"\n')
