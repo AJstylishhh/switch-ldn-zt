@@ -37,7 +37,7 @@ jobs:
         run: |
           set -eu
           test "$(git -C ldn_mitm rev-parse HEAD)" = "9a2639eff5b2e60065be3dfae69c46de6c3d7648"
-          test "$(git -C ldn_mitm rev-parse Atmosphere-libs)" = "82f1553"
+          test "$(git -C ldn_mitm rev-parse Atmosphere-libs)" = "82f1553c4c7e68364f7e630b1c68f2aee8681dee"
           test "$(git -C libzt rev-parse HEAD)" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
           test -f ldn_mitm/ldn_mitm/Makefile
           test -f ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk
