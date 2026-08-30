@@ -124,16 +124,18 @@ def main():
 
     mk = LDN / "Makefile"
     text = mk.read_text()
-    if 'third_party/libzt' not in text:
+    libzt_dir = (ROOT / "third_party" / "libzt").resolve().as_posix()
+    if "LIBDIRS += " not in text or "third_party/libzt" not in text:
         text = text.replace(
             'CXXFLAGS\t+= $(VERSION_DEFINES)\n',
             'CXXFLAGS\t+= $(VERSION_DEFINES)\n'
-            'LIBDIRS += ../../third_party/libzt\n'
+            f'LIBDIRS += {libzt_dir}\n'
             'LIBS += -lzt\n'
         )
         mk.write_text(text)
 
     print("LDN ZeroTier patch applied")
+    print(f"libzt Makefile directory: {libzt_dir}")
 
 if __name__ == '__main__':
     main()
