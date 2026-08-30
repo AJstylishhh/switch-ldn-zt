@@ -16,6 +16,14 @@ def replace(path, old, new):
     path.write_text(text.replace(old, new, 1))
 
 
+def replace_all(path, old, new, minimum=1):
+    text = path.read_text()
+    count = text.count(old)
+    if count < minimum:
+        raise SystemExit(f"patch anchor missing: {path}: expected at least {minimum}, found {count}: {old[:80]!r}")
+    path.write_text(text.replace(old, new))
+
+
 def main():
     if not (ZT_INC / "ZeroTierSockets.h").is_file():
         raise SystemExit("libzt headers missing")
@@ -83,14 +91,12 @@ def main():
         '            rc = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));',
         '            rc = 0;')
     replace(ld, '        fd = ::socket(AF_INET, SOCK_STREAM, 0);', '        fd = ztbridge::socket(AF_INET, SOCK_STREAM, 0);')
-    replace(ld,
+    replace_all(ld,
         '            if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {',
-        '            if (ztbridge::bind(fd, &addr) != 0) {')
+        '            if (ztbridge::bind(fd, &addr) != 0) {',
+        minimum=2)
     replace(ld, '            if (listen(fd, 10) != 0) {', '            if (ztbridge::listen(fd, 10) != 0) {')
     replace(ld, '        fd = ::socket(AF_INET, SOCK_DGRAM, 0);', '        fd = ztbridge::socket(AF_INET, SOCK_DGRAM, 0);')
-    replace(ld,
-        '            if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {',
-        '            if (ztbridge::bind(fd, &addr) != 0) {')
     replace(ld,
         '        int ret = ::connect(this->tcp->getFd(), (struct sockaddr *)&addr, sizeof(addr));',
         '        int ret = ztbridge::connect(this->tcp->getFd(), &addr);')
@@ -100,9 +106,6 @@ def main():
     replace(ld,
         '        Result rc = nifmGetCurrentIpAddress(&ip);\n        if (R_SUCCEEDED(rc)) {\n            ip = ntohl(ip);\n            memcpy(mac->raw + 2, &ip, sizeof(ip));\n        }\n\n        return rc;',
         '        Result rc = ztbridge::local_ip_host_order(&ip);\n        if (R_SUCCEEDED(rc)) {\n            memcpy(mac->raw + 2, &ip, sizeof(ip));\n        }\n        return rc;')
-    replace(ld,
-        '        return MAKERESULT(ModuleID, 32);\n    }\n\n    Result LANDiscovery::finalize()',
-        '        return MAKERESULT(ModuleID, 32);\n    }\n\n    Result LANDiscovery::finalize()')
 
     li = SRC / "ldn_icommunication.cpp"
     replace(li,
