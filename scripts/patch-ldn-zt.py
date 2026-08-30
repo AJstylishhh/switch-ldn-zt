@@ -60,13 +60,6 @@ def main():
     shutil.copy2(ROOT / "scripts" / "zt_bridge.cpp", SRC / "zt_bridge.cpp")
     shutil.copy2(ROOT / "scripts" / "errno_compat.c", SRC / "errno_compat.c")
 
-    # libzt is substantially larger than stock ldn_mitm and the upstream
-    # sysmodule's 128 KiB private heap is too small for ZeroTier startup.
-    # Patch the actual sysmodule allocator rather than changing generated
-    # lan_discovery.cpp or adding a post-build workaround.
-    ldn_main = SRC / "ldnmitm_main.cpp"
-    replace(ldn_main, 'alignas(0x40) constinit u8 g_heap_memory[128_KB];', 'alignas(0x40) constinit u8 g_heap_memory[1_MB];')
-
     lp = SRC / "lan_protocol.cpp"
     replace(lp, '#include <stratosphere.hpp>\n', '#include <stratosphere.hpp>\n#include "zt_bridge.hpp"\n')
     old_poll = '''    struct pollfd pfds[nfds];
@@ -148,7 +141,6 @@ def main():
     print("LDN ZeroTier patch applied")
     print(f"libzt Makefile directory: {libzt_dir}")
     print("libnx linked for Switch POSIX errno/socket compatibility")
-    print("ldn_mitm private heap increased from 128 KiB to 1 MiB for libzt startup")
 
 if __name__ == '__main__':
     main()
