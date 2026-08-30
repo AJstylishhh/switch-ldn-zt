@@ -32,6 +32,7 @@ def replace_function(path, signature, new_body):
     brace = text.find("{", start)
     if brace < 0:
         raise SystemExit(f"patch function has no opening brace: {path}: {signature!r}")
+
     depth = 0
     end = None
     for i in range(brace, len(text)):
@@ -44,6 +45,7 @@ def replace_function(path, signature, new_body):
                 break
     if end is None:
         raise SystemExit(f"patch function has unbalanced braces: {path}: {signature!r}")
+
     replacement = signature + " " + new_body
     path.write_text(text[:start] + replacement + text[end:])
 
@@ -113,6 +115,7 @@ def main():
         if (R_FAILED(rc)) {
             return rc;
         }
+
         address.SetValue(ztAddress);
         netmask.SetValue(0xFFFFFFFF);
         LogFormat("get_ipv4_address %x %x", address.GetValue(), netmask.GetValue());
@@ -122,7 +125,12 @@ def main():
     mk = LDN / "Makefile"
     text = mk.read_text()
     if 'third_party/libzt' not in text:
-        text = text.replace('CXXFLAGS\t+= $(VERSION_DEFINES)\n', 'CXXFLAGS\t+= $(VERSION_DEFINES)\nINCLUDES += ../../third_party/libzt/include\nLIBDIRS += ../../third_party/libzt/lib\nLIBPATHS += -L../../third_party/libzt/lib\nLIBS += -lzt\n')
+        text = text.replace(
+            'CXXFLAGS\t+= $(VERSION_DEFINES)\n',
+            'CXXFLAGS\t+= $(VERSION_DEFINES)\n'
+            'LIBDIRS += ../../third_party/libzt\n'
+            'LIBS += -lzt\n'
+        )
         mk.write_text(text)
 
     print("LDN ZeroTier patch applied")
