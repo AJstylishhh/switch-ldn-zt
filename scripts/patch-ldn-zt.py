@@ -165,12 +165,14 @@ def main():
     }''')
 
     mk = LDN / "Makefile"
+    libzt_dir = (ROOT / "third_party" / "libzt").resolve().as_posix()
     text = mk.read_text()
-    libzt_dir = ZT_LIB.parent.resolve().as_posix()
-    if "third_party/libzt" not in text:
-        text += f"\n# Real ZeroTier static library\nLIBDIRS += {libzt_dir}\nLIBS += -lzt -lnx\n"
-    elif "LIBS += -lzt -lnx" not in text:
-        text += "\nLIBS += -lzt -lnx\n"
+    text = text.replace(
+        'CXXFLAGS\t+= $(VERSION_DEFINES)\n',
+        'CXXFLAGS\t+= $(VERSION_DEFINES)\n'
+        f'LIBDIRS += {libzt_dir}\n'
+        'LIBS += -lzt -lnx\n'
+    )
     mk.write_text(text)
 
     if (SRC / "zt_stubs.cpp").exists():
