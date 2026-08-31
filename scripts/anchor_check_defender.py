@@ -27,8 +27,10 @@ ANCHORS = {
         "if (listen(fd, 10) != 0) {",
         "fd = ::socket(AF_INET, SOCK_DGRAM, 0);",
         "int ret = ::connect(this->tcp->getFd(), (struct sockaddr *)&addr, sizeof(addr));",
-        "Result rc = nifmGetCurrentIpAddress(&ipAddress);",
-        "Result rc = nifmGetCurrentIpAddress(&ip);",
+        "rc = nifmGetCurrentIpAddress(&ipAddress);",
+        "rc = nifmGetCurrentIpAddress(&ip);",
+        "ScopedNifmServiceTypeSetter setter(nifm::ServiceType::System);",
+        "nifmGetCurrentIpConfigInfo(address.GetPointer(), netmask.GetPointer(), &gateway, &primary_dns, &secondary_dns);",
     ],
     "ldn_icommunication.cpp": [
         "Result ICommunicationService::Initialize(const sf::ClientProcessId &client_process_id)",
