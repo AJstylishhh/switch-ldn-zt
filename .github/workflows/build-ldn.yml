@@ -7,7 +7,7 @@ on:
       - 'ldn_mitm/**'
       - 'scripts/patch-ldn-zt.py'
       - 'scripts/zt_bridge.*'
-      - 'scripts/errno_compat.c'
+      - 'scripts/zt_stubs.cpp'
       - '.gitmodules'
       - '.github/workflows/build-ldn.yml'
   workflow_dispatch:
@@ -45,59 +45,30 @@ jobs:
           actual="$(git -C libzt rev-parse HEAD)"
           echo "libzt: $actual"
           test "$actual" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
-          for f in \
-            ldn_mitm/ldn_mitm/Makefile \
-            ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk \
-            ldn_mitm/Atmosphere-libs/libstratosphere/Makefile \
-            scripts/patch-ldn-zt.py \
-            scripts/zt_bridge.cpp \
-            scripts/zt_bridge.hpp \
-            scripts/errno_compat.c; do
-            echo "checking $f"
-            test -f "$f"
-          done
-
-      - name: Build libzt for Switch
-        working-directory: libzt
-        run: |
-          set -eu
-          export DEVKITA64=/opt/devkitpro/devkitA64
-          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
-          cmake -S . -B build-switch \
-            -DCMAKE_TOOLCHAIN_FILE=/__w/switch-ldn-zt/switch-ldn-zt/cmake/switch.toolchain.cmake \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_STATIC_LIB=ON \
-            -DBUILD_SHARED_LIB=OFF \
-            -DBUILD_HOST_EXAMPLES=OFF \
-            -DBUILD_HOST_SELFTEST=OFF \
-            -DALLOW_INSTALL_TARGET=OFF \
-            -DZTS_DISABLE_CENTRAL_API=ON \
-            -DSWITCH=ON \
-            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_ERRNO_STDINCLUDE=1 -DLWIP_PROVIDE_ERRNO=0 -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port/include" \
-            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_ERRNO_STDINCLUDE=1 -DLWIP_PROVIDE_ERRNO=0 -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port/include"
-          cmake --build build-switch --target zt-static --parallel 2
-          mkdir -p ../third_party/libzt/include ../third_party/libzt/lib
-          cp include/ZeroTierSockets.h ../third_party/libzt/include/
-          cp "$(find build-switch -type f -name 'libzt.a' | head -1)" ../third_party/libzt/lib/
-          test -s ../third_party/libzt/lib/libzt.a
+          test -f ldn_mitm/ldn_mitm/Makefile
+          test -f ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk
+          test -f ldn_mitm/Atmosphere-libs/libstratosphere/Makefile
+          test -f scripts/patch-ldn-zt.py
+          test -f scripts/zt_bridge.hpp
+          test -f scripts/zt_stubs.cpp
 
       - name: Patch LDN socket transport to ZeroTier
         run: |
           set -eu
           python3 scripts/patch-ldn-zt.py
-          test -f ldn_mitm/ldn_mitm/source/zt_bridge.cpp
-          test -f ldn_mitm/ldn_mitm/source/errno_compat.c
+          test -f ldn_mitm/ldn_mitm/source/zt_stubs.cpp
+          test -f ldn_mitm/ldn_mitm/source/zt_bridge.hpp
           grep -q 'ztbridge::poll' ldn_mitm/ldn_mitm/source/lan_protocol.cpp
           grep -q 'ztbridge::connect' ldn_mitm/ldn_mitm/source/lan_discovery.cpp
           grep -q 'ztbridge::init' ldn_mitm/ldn_mitm/source/ldn_icommunication.cpp
-          grep -q 'third_party/libzt' ldn_mitm/ldn_mitm/Makefile
+          ! grep -q -- '-lzt' ldn_mitm/ldn_mitm/Makefile
 
       - name: Restore Atmosphere library cache
         id: atmosphere-cache
         uses: actions/cache/restore@v4
         with:
           path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
-          key: atmosphere-libstratosphere-82f1553-devkita64
+          key: atmosphere-libstratosphere-8e9c9ab-devkita64
 
       - name: Build Atmosphere libraries
         if: steps.atmosphere-cache.outputs.cache-hit != 'true'
@@ -118,7 +89,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
-          key: atmosphere-libstratosphere-82f1553-devkita64
+          key: atmosphere-libstratosphere-8e9c9ab-devkita64
 
       - name: Build LDN ZeroTier sysmodule
         working-directory: ldn_mitm/ldn_mitm
