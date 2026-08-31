@@ -7,6 +7,11 @@ on:
       - 'ldn_mitm/**'
       - '.gitmodules'
       - '.github/workflows/build-ldn.yml'
+  pull_request:
+    paths:
+      - 'ldn_mitm/**'
+      - '.gitmodules'
+      - '.github/workflows/build-ldn.yml'
   workflow_dispatch:
 
 jobs:
