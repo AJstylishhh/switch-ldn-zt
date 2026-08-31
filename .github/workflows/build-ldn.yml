@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     container: devkitpro/devkita64:latest
+    env:
+      VANILLA_CONTROL: 'true'
 
     steps:
       - name: Checkout
@@ -42,39 +44,23 @@ jobs:
           actual="$(git -C ldn_mitm/Atmosphere-libs rev-parse HEAD)"
           echo "Atmosphere-libs: $actual"
           test "$actual" = "82f1553c4c7e68364f7e630b1c68f2aee8681dee"
-          actual="$(git -C libzt rev-parse HEAD)"
-          echo "libzt: $actual"
-          test "$actual" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
           test -f ldn_mitm/ldn_mitm/Makefile
           test -f ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk
           test -f ldn_mitm/Atmosphere-libs/libstratosphere/Makefile
-          test -f scripts/patch-ldn-zt.py
-          test -f scripts/zt_bridge.hpp
-          test -f scripts/zt_stubs.cpp
-
-      - name: Patch LDN socket transport to ZeroTier
-        run: |
-          set -eu
-          python3 scripts/patch-ldn-zt.py
-          test -f ldn_mitm/ldn_mitm/source/zt_stubs.cpp
-          test -f ldn_mitm/ldn_mitm/source/zt_bridge.hpp
-          grep -q 'ztbridge::poll' ldn_mitm/ldn_mitm/source/lan_protocol.cpp
-          grep -q 'ztbridge::connect' ldn_mitm/ldn_mitm/source/lan_discovery.cpp
-          grep -q 'ztbridge::init' ldn_mitm/ldn_mitm/source/ldn_icommunication.cpp
-          ! grep -q -- '-lzt' ldn_mitm/ldn_mitm/Makefile
 
       - name: Restore Atmosphere library cache
         id: atmosphere-cache
         uses: actions/cache/restore@v4
         with:
           path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
-          key: atmosphere-libstratosphere-8e9c9ab-devkita64
+          key: atmosphere-libstratosphere-82f1553-devkita64
 
       - name: Build Atmosphere libraries
         if: steps.atmosphere-cache.outputs.cache-hit != 'true'
         working-directory: ldn_mitm/Atmosphere-libs
         run: |
           set -eu
+          rm -f libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
           make -C libstratosphere nx_release
           test -s libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
 
@@ -89,36 +75,34 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
-          key: atmosphere-libstratosphere-8e9c9ab-devkita64
+          key: atmosphere-libstratosphere-82f1553-devkita64
 
-      - name: Build LDN ZeroTier sysmodule
+      - name: Build vanilla LDN control
         working-directory: ldn_mitm/ldn_mitm
         run: |
           set -eu
+          git -C .. status --short
           make clean || true
           make -j2
           test -s ldn_mitm.nsp
           ls -lh ldn_mitm.nsp
 
-      - name: Package sysmodule and config template
+      - name: Package vanilla control
         run: |
           set -eu
           mkdir -p dist/atmosphere/contents/4200000000000010/flags
-          mkdir -p dist/config/switch-ldn-zt
           cp ldn_mitm/ldn_mitm/ldn_mitm.nsp dist/atmosphere/contents/4200000000000010/exefs.nsp
           : > dist/atmosphere/contents/4200000000000010/flags/boot2.flag
           cp ldn_mitm/ldn_mitm/res/toolbox.json dist/atmosphere/contents/4200000000000010/toolbox.json
-          printf 'YOUR_ZEROTIER_NETWORK_ID\n' > dist/config/switch-ldn-zt/network_id.txt
-          printf 'PEER_SWITCH_ZEROTIER_IP\n' > dist/config/switch-ldn-zt/peer_ip.txt
           test -s dist/atmosphere/contents/4200000000000010/exefs.nsp
           test -f dist/atmosphere/contents/4200000000000010/flags/boot2.flag
           test -s dist/atmosphere/contents/4200000000000010/toolbox.json
           cd dist
-          zip -r ../ldn-zt-sysmodule.zip atmosphere config
+          zip -r ../ldn-vanilla-control.zip atmosphere
 
-      - name: Upload LDN ZeroTier sysmodule
+      - name: Upload vanilla control
         uses: actions/upload-artifact@v4
         with:
-          name: ldn-zt-sysmodule
-          path: ldn-zt-sysmodule.zip
+          name: ldn-vanilla-control
+          path: ldn-vanilla-control.zip
           retention-days: 14
