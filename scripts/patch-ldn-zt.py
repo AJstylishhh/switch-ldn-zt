@@ -8,11 +8,13 @@ SRC = LDN / "source"
 ZT_INC = ROOT / "third_party" / "libzt" / "include"
 ZT_LIB = ROOT / "third_party" / "libzt" / "lib"
 
+
 def replace(path, old, new):
     text = path.read_text()
     if old not in text:
         raise SystemExit(f"patch anchor missing: {path}: {old[:80]!r}")
     path.write_text(text.replace(old, new, 1))
+
 
 def replace_all(path, old, new, minimum=1):
     text = path.read_text()
@@ -20,6 +22,7 @@ def replace_all(path, old, new, minimum=1):
     if count < minimum:
         raise SystemExit(f"patch anchor missing: {path}: expected at least {minimum}, found {count}: {old[:80]!r}")
     path.write_text(text.replace(old, new))
+
 
 def replace_function(path, signature, new_body):
     text = path.read_text()
@@ -43,15 +46,21 @@ def replace_function(path, signature, new_body):
     replacement = signature + " " + new_body
     path.write_text(text[:start] + replacement + text[end:])
 
+
 def main():
-    if not (ZT_INC / "ZeroTierSockets.h").is_file(): raise SystemExit("libzt headers missing")
-    if not (ZT_LIB / "libzt.a").is_file(): raise SystemExit("libzt.a missing")
+    isolation = True
+    if not isolation:
+        if not (ZT_INC / "ZeroTierSockets.h").is_file(): raise SystemExit("libzt headers missing")
+        if not (ZT_LIB / "libzt.a").is_file(): raise SystemExit("libzt.a missing")
+        shutil.copy2(ROOT / "scripts" / "zt_bridge.cpp", SRC / "zt_bridge.cpp")
+        shutil.copy2(ROOT / "scripts" / "errno_compat.c", SRC / "errno_compat.c")
     shutil.copy2(ROOT / "scripts" / "zt_bridge.hpp", SRC / "zt_bridge.hpp")
-    shutil.copy2(ROOT / "scripts" / "zt_bridge.cpp", SRC / "zt_bridge.cpp")
-    shutil.copy2(ROOT / "scripts" / "errno_compat.c", SRC / "errno_compat.c")
+    shutil.copy2(ROOT / "scripts" / "zt_stubs.cpp", SRC / "zt_stubs.cpp")
+
     main_cpp = SRC / "ldnmitm_main.cpp"
     replace(main_cpp, '        R_ABORT_UNLESS(log::Initialize());\n        LogFormat("main");', '        R_ABORT_UNLESS(log::Initialize());\n        LogFormat("LDN-ZT: Main entered");')
     replace(main_cpp, '        R_ABORT_UNLESS((mitm::g_server_manager.RegisterMitmServer<mitm::ldn::LdnMitMService>(0, MitmServiceName)));\n        LogFormat("registered");', '        R_ABORT_UNLESS((mitm::g_server_manager.RegisterMitmServer<mitm::ldn::LdnMitMService>(0, MitmServiceName)));\n        LogFormat("LDN-ZT: mitm registered");')
+
     lp = SRC / "lan_protocol.cpp"
     replace(lp, '#include <stratosphere.hpp>\n', '#include <stratosphere.hpp>\n#include "zt_bridge.hpp"\n')
     old_poll = '''    struct pollfd pfds[nfds];
@@ -77,6 +86,7 @@ def main():
     replace(lp, '    return ::sendto(this->fd, buf, len, 0, nullptr, 0);', '    return ztbridge::send(this->fd, buf, len);')
     replace(lp, '    socklen_t addr_len = sizeof(*addr);\n    return ::recvfrom(this->fd, buf, len, 0, (struct sockaddr *)addr, &addr_len);', '    AMS_UNUSED(addr);\n    return ztbridge::recv(this->fd, buf, len);')
     replace(lp, '    return ::sendto(this->fd, buf, len, 0, (struct sockaddr *)addr, sizeof(*addr));', '    return ztbridge::sendto(this->fd, buf, len, addr);')
+
     ld = SRC / "lan_discovery.cpp"
     replace(ld, '#include "ipinfo.hpp"\n', '#include "ipinfo.hpp"\n#include "zt_bridge.hpp"\n')
     replace(ld, '''            struct sockaddr_in addr;
@@ -97,6 +107,7 @@ def main():
     replace(ld, '        int ret = ::connect(this->tcp->getFd(), (struct sockaddr *)&addr, sizeof(addr));', '        int ret = ztbridge::connect(this->tcp->getFd(), &addr);')
     replace(ld, '        Result rc = nifmGetCurrentIpAddress(&ipAddress);\n        if (R_FAILED(rc))\n        {\n            return rc;\n        }\n        ipAddress = ntohl(ipAddress);', '        Result rc = ztbridge::local_ip_host_order(&ipAddress);\n        if (R_FAILED(rc)) {\n            return rc;\n        }')
     replace(ld, '        Result rc = nifmGetCurrentIpAddress(&ip);\n        if (R_SUCCEEDED(rc)) {\n            ip = ntohl(ip);\n            memcpy(mac->raw + 2, &ip, sizeof(ip));\n        }\n\n        return rc;', '        Result rc = ztbridge::local_ip_host_order(&ip);\n        if (R_SUCCEEDED(rc)) {\n            memcpy(mac->raw + 2, &ip, sizeof(ip));\n        }\n        return rc;')
+
     li = SRC / "ldn_icommunication.cpp"
     replace(li, '#include <arpa/inet.h>\n', '#include <arpa/inet.h>\n#include "zt_bridge.hpp"\n')
     replace(li, '        R_TRY(lanDiscovery.initialize([&](){', '''        if (ztbridge::init() != 0) {
@@ -115,20 +126,29 @@ def main():
         LogFormat("get_ipv4_address %x %x", address.GetValue(), netmask.GetValue());
         return rc;
     }''')
+
     mk = LDN / "Makefile"
     text = mk.read_text()
-    libzt_dir = (ROOT / "third_party" / "libzt").resolve().as_posix()
-    if "LIBDIRS += " not in text or "third_party/libzt" not in text:
-        text = text.replace('CXXFLAGS\t+= $(VERSION_DEFINES)\n', 'CXXFLAGS\t+= $(VERSION_DEFINES)\n' f'LIBDIRS += {libzt_dir}\n' 'LIBS += -lzt -lnx\n')
+    if isolation:
+        text = text.replace('LIBS += -lzt -lnx', 'LIBS += -lnx\n')
+        if 'zt_stubs.cpp' not in text:
+            text = text.replace('source/zt_bridge.cpp', 'source/zt_stubs.cpp')
+            if 'zt_stubs.cpp' not in text:
+                text = text.replace('$(SOURCES)', '$(SOURCES) source/zt_stubs.cpp')
         mk.write_text(text)
-    elif "LIBS += -lzt -lnx" not in text:
-        text = text.replace('LIBS += -lzt\n', 'LIBS += -lzt -lnx\n')
-        mk.write_text(text)
+    else:
+        libzt_dir = (ROOT / "third_party" / "libzt").resolve().as_posix()
+        if "LIBDIRS += " not in text or "third_party/libzt" not in text:
+            text = text.replace('CXXFLAGS\t+= $(VERSION_DEFINES)\n', 'CXXFLAGS\t+= $(VERSION_DEFINES)\n' f'LIBDIRS += {libzt_dir}\n' 'LIBS += -lzt -lnx\n')
+            mk.write_text(text)
+        elif "LIBS += -lzt -lnx" not in text:
+            text = text.replace('LIBS += -lzt\n', 'LIBS += -lzt -lnx\n')
+            mk.write_text(text)
+
     print("LDN ZeroTier patch applied")
-    print(f"libzt Makefile directory: {libzt_dir}")
-    print("libnx linked for Switch POSIX errno/socket compatibility")
+    print("ISOLATION BUILD: zt_stubs.cpp, no libzt.a")
     print("boot diagnostics: Main entered / mitm registered")
-    print("ztbridge init is lazy and uses explicit int -> Result error handling")
+    print("ztbridge init remains lazy")
 
 if __name__ == '__main__':
     main()
