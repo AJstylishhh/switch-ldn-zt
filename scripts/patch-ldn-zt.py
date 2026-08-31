@@ -94,7 +94,7 @@ def main():
     replace(ld, '''            struct sockaddr_in addr;
             socklen_t addrlen = sizeof(addr);
             int new_fd = accept(this->getFd(), (struct sockaddr *)&addr, &addrlen);''', '''            int new_fd = ztbridge::accept(this->getFd());''')
-    replace(ld, '            close(new_fd);', '            ztbridge::close(new_fd);')
+    replace_all(ld, '            close(new_fd);', '            ztbridge::close(new_fd);', minimum=2)
     replace_function(ld, '    u32 LDUdpSocket::getBroadcast()', '''{
         return ztbridge::peer_ip_host_order();
     }''')
@@ -107,7 +107,6 @@ def main():
     replace(ld, '            if (listen(fd, 10) != 0) {', '            if (ztbridge::listen(fd, 10) != 0) {')
     replace(ld, '        fd = ::socket(AF_INET, SOCK_DGRAM, 0);', '        fd = ztbridge::socket(AF_INET, SOCK_DGRAM, 0);')
     replace(ld, '        int ret = ::connect(this->tcp->getFd(), (struct sockaddr *)&addr, sizeof(addr));', '        int ret = ztbridge::connect(this->tcp->getFd(), &addr);')
-    # Defender v1.21.2 exact getNodeInfo/getFakeMac blocks use `rc =`, not `Result rc =`.
     replace(ld, '''        rc = nifmGetCurrentIpAddress(&ipAddress);
         if (R_FAILED(rc))
         {
@@ -148,15 +147,22 @@ def main():
         return rc;
     }''')
 
+    # Defender Makefile discovers every .cpp in $(SOURCES) automatically.
+    # Copying zt_stubs.cpp into source/ is therefore sufficient; never mutate
+    # $(SOURCES) or inject an individual source filename into the Makefile.
     mk = LDN / "Makefile"
     text = mk.read_text()
     if '-lzt' in text:
         text = text.replace('LIBS += -lzt -lnx', 'LIBS += -lnx').replace('LIBS += -lzt', 'LIBS += -lnx')
-    if 'zt_stubs.cpp' not in text:
-        text = text.replace('source/zt_bridge.cpp', 'source/zt_stubs.cpp')
-        if 'zt_stubs.cpp' not in text:
-            text = text.replace('$(SOURCES)', '$(SOURCES) source/zt_stubs.cpp')
     mk.write_text(text)
+
+    if not (SRC / "zt_stubs.cpp").is_file():
+        raise SystemExit("zt_stubs.cpp was not copied into Defender source/")
+    if not (SRC / "zt_bridge.hpp").is_file():
+        raise SystemExit("zt_bridge.hpp was not copied into Defender source/")
+    if '-lzt' in mk.read_text():
+        raise SystemExit("-lzt remains in Defender Makefile")
+
     print("LDN-ZT stubs-first patch applied; no libzt.a / no -lzt")
 
 if __name__ == '__main__':
