@@ -6,6 +6,10 @@
 #include <stdio.h>
 #include <string.h>
 
+extern "C" int pipe(int fd[2]) {
+    return socketpair(AF_UNIX, SOCK_STREAM, 0, fd);
+}
+
 namespace ztbridge {
 
 static constexpr const char *ConfigDir = "sdmc:/config/switch-ldn-zt";
