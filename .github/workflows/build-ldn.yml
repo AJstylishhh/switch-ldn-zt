@@ -1,57 +1,61 @@
-name: Build LDN-ZT stubs-first control
+name: Build LDN-ZT real libzt
 
 on:
   push:
     branches: [main]
     paths:
       - 'ldn_mitm/**'
+      - 'libzt'
       - 'scripts/anchor_check_defender.py'
       - 'scripts/patch-ldn-zt.py'
+      - 'scripts/zt_bridge.cpp'
       - 'scripts/zt_bridge.hpp'
-      - 'scripts/zt_stubs.cpp'
+      - 'scripts/errno_compat.c'
       - '.gitmodules'
       - '.github/workflows/build-ldn.yml'
   pull_request:
     paths:
       - 'ldn_mitm/**'
+      - 'libzt'
       - 'scripts/anchor_check_defender.py'
       - 'scripts/patch-ldn-zt.py'
+      - 'scripts/zt_bridge.cpp'
       - 'scripts/zt_bridge.hpp'
-      - 'scripts/zt_stubs.cpp'
+      - 'scripts/errno_compat.c'
       - '.gitmodules'
       - '.github/workflows/build-ldn.yml'
   workflow_dispatch:
 
 jobs:
-  build-ldn-zt-stubs:
+  build-ldn-zt-real:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     container: devkitpro/devkita64:latest
 
     steps:
-      - name: Checkout exact Defender base
+      - name: Checkout exact Defender and libzt bases
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Verify Defender and Atmosphere-libs pins
+      - name: Verify pinned sources
         run: |
           set -eu
-          actual="$(git -C ldn_mitm rev-parse HEAD)"
-          echo "ldn_mitm: $actual"
-          test "$actual" = "2fe07817eeea06b712009395f8bbcb2a02d30979"
-
-          atmosphere_commit="$(sed -n 's/^[[:space:]]*commit = //p' ldn_mitm/Atmosphere-libs/.gitrepo)"
-          echo "Atmosphere-libs: $atmosphere_commit"
-          test "$atmosphere_commit" = "d3083af1827cd6ca2a96feb9316eb85cd01bae1f"
+          test "$(git -C ldn_mitm rev-parse HEAD)" = "2fe07817eeea06b712009395f8bbcb2a02d30979"
+          test "$(git -C libzt rev-parse HEAD)" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
+          test "$(sed -n 's/^[[:space:]]*commit = //p' ldn_mitm/Atmosphere-libs/.gitrepo)" = "d3083af1827cd6ca2a96feb9316eb85cd01bae1f"
+          test -f scripts/patch-ldn-zt.py
+          test -f scripts/zt_bridge.cpp
+          test -f scripts/zt_bridge.hpp
+          test -f scripts/errno_compat.c
 
       - name: Verify Defender v1.21.2 patch anchors
         run: python3 scripts/anchor_check_defender.py
 
       - name: Restore Atmosphere libstratosphere cache
         id: atmosphere-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
           key: atmosphere-libstratosphere-d3083af-devkita64
@@ -61,22 +65,76 @@ jobs:
         working-directory: ldn_mitm/Atmosphere-libs
         run: |
           set -eu
-          make -C libstratosphere clean || true
           make -C libstratosphere nx_release
           test -s libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
 
-      - name: Apply ZT stubs-only patch
+      - name: Save Atmosphere library cache on miss
+        if: steps.atmosphere-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
+          key: atmosphere-libstratosphere-d3083af-devkita64
+
+      - name: Restore libzt static library cache
+        id: libzt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: third_party/libzt
+          key: libzt-76c138bb916bc3a20d356bd4ef8e2195212ddb1e-devkita64
+
+      - name: Build libzt for Switch on cache miss
+        if: steps.libzt-cache.outputs.cache-hit != 'true'
+        working-directory: libzt
+        run: |
+          set -eu
+          export DEVKITA64=/opt/devkitpro/devkitA64
+          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
+          cmake -S . -B build-switch \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/switch.toolchain.cmake" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_STATIC_LIB=ON \
+            -DBUILD_SHARED_LIB=OFF \
+            -DBUILD_HOST_EXAMPLES=OFF \
+            -DBUILD_HOST_SELFTEST=OFF \
+            -DALLOW_INSTALL_TARGET=OFF \
+            -DZTS_DISABLE_CENTRAL_API=ON \
+            -DSWITCH=ON \
+            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_ERRNO_STDINCLUDE=1 -DLWIP_PROVIDE_ERRNO=0 -I$GITHUB_WORKSPACE/libzt/ext -I$GITHUB_WORKSPACE/libzt/ext/lwip-contrib/ports/unix/port/include" \
+            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_ERRNO_STDINCLUDE=1 -DLWIP_PROVIDE_ERRNO=0 -I$GITHUB_WORKSPACE/libzt/ext -I$GITHUB_WORKSPACE/libzt/ext/lwip-contrib/ports/unix/port/include"
+          cmake --build build-switch --target zt-static --parallel 2
+          mkdir -p "$GITHUB_WORKSPACE/third_party/libzt/include" "$GITHUB_WORKSPACE/third_party/libzt/lib"
+          cp include/ZeroTierSockets.h "$GITHUB_WORKSPACE/third_party/libzt/include/"
+          cp "$(find build-switch -type f -name 'libzt.a' | head -1)" "$GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a"
+          test -s "$GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a"
+          test -s "$GITHUB_WORKSPACE/third_party/libzt/include/ZeroTierSockets.h"
+
+      - name: Save libzt cache on miss
+        if: steps.libzt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: third_party/libzt
+          key: libzt-76c138bb916bc3a20d356bd4ef8e2195212ddb1e-devkita64
+
+      - name: Apply real ZT bridge to Defender
         run: |
           set -eu
           python3 scripts/patch-ldn-zt.py
-          test -f ldn_mitm/ldn_mitm/source/zt_stubs.cpp
+          test -f ldn_mitm/ldn_mitm/source/zt_bridge.cpp
           test -f ldn_mitm/ldn_mitm/source/zt_bridge.hpp
-          ! grep -R -- '-lzt' ldn_mitm/ldn_mitm/Makefile
-          test ! -f ldn_mitm/ldn_mitm/source/zt_bridge.cpp
-          test ! -f ldn_mitm/ldn_mitm/source/errno_compat.c
-          test ! -f third_party/libzt/lib/libzt.a
+          test -f ldn_mitm/ldn_mitm/source/errno_compat.c
+          test ! -f ldn_mitm/ldn_mitm/source/zt_stubs.cpp
+          test -s third_party/libzt/lib/libzt.a
+          test -s third_party/libzt/include/ZeroTierSockets.h
+          grep -q -- '-lzt' ldn_mitm/ldn_mitm/Makefile
+          grep -q -- 'third_party/libzt' ldn_mitm/ldn_mitm/Makefile
 
-      - name: Build patched vanilla-with-stubs ldn_mitm.nsp
+      - name: Verify pure-C errno compatibility
+        run: |
+          set -eu
+          grep -qx 'int errno = 0;' ldn_mitm/ldn_mitm/source/errno_compat.c
+          ! grep -R -- 'extern "C" int errno' ldn_mitm/ldn_mitm/source scripts
+
+      - name: Build real-libzt LDN sysmodule
         working-directory: ldn_mitm/ldn_mitm
         run: |
           set -eu
@@ -85,7 +143,7 @@ jobs:
           test -s ldn_mitm.nsp
           ls -lh ldn_mitm.nsp
 
-      - name: Package stubs-first control
+      - name: Package real-libzt sysmodule
         run: |
           set -eu
           rm -rf dist
@@ -93,17 +151,15 @@ jobs:
           cp ldn_mitm/ldn_mitm/ldn_mitm.nsp dist/atmosphere/contents/4200000000000010/exefs.nsp
           cp ldn_mitm/ldn_mitm/res/toolbox.json dist/atmosphere/contents/4200000000000010/toolbox.json
           touch dist/atmosphere/contents/4200000000000010/flags/boot2.flag
-
           test -s dist/atmosphere/contents/4200000000000010/exefs.nsp
           test -s dist/atmosphere/contents/4200000000000010/toolbox.json
           test -f dist/atmosphere/contents/4200000000000010/flags/boot2.flag
-
           cd dist
-          zip -r ../ldn-zt-stubs-control.zip atmosphere
+          zip -r ../ldn-zt-real-libzt.zip atmosphere
 
-      - name: Upload stubs-first control
+      - name: Upload real-libzt sysmodule
         uses: actions/upload-artifact@v4
         with:
-          name: ldn-zt-stubs-control
-          path: ldn-zt-stubs-control.zip
+          name: ldn-zt-real-libzt
+          path: ldn-zt-real-libzt.zip
           retention-days: 14
