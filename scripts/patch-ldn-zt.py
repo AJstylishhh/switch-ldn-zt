@@ -75,6 +75,7 @@ def main():
     main_cpp = SRC / "ldnmitm_main.cpp"
     replace(main_cpp, '        R_ABORT_UNLESS(log::Initialize());\n        LogFormat("main");', '        R_ABORT_UNLESS(log::Initialize());\n        LogFormat("LDN-ZT: Main entered");')
     replace(main_cpp, '        R_ABORT_UNLESS((mitm::g_server_manager.RegisterMitmServer<mitm::ldn::LdnMitMService>(0, MitmServiceName)));\n        LogFormat("registered");', '        R_ABORT_UNLESS((mitm::g_server_manager.RegisterMitmServer<mitm::ldn::LdnMitMService>(0, MitmServiceName)));\n        LogFormat("LDN-ZT: mitm registered");')
+    replace(main_cpp, 'alignas(0x40) constinit u8 g_heap_memory[128_KB];', 'alignas(0x40) constinit u8 g_heap_memory[1_MB];')
 
     lp = SRC / "lan_protocol.cpp"
     replace(lp, '#include <stratosphere.hpp>\n', '#include <stratosphere.hpp>\n#include "zt_bridge.hpp"\n')
