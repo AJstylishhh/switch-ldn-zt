@@ -1,102 +1,80 @@
-name: Build LDN sysmodule
+name: Build vanilla LDN control
 
 on:
   push:
     branches: [main]
     paths:
       - 'ldn_mitm/**'
-      - 'scripts/patch-ldn-zt.py'
-      - 'scripts/zt_bridge.*'
-      - 'scripts/zt_stubs.cpp'
       - '.gitmodules'
       - '.github/workflows/build-ldn.yml'
   workflow_dispatch:
 
 jobs:
-  build-ldn:
+  build-vanilla-ldn:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     container: devkitpro/devkita64:latest
-    env:
-      VANILLA_CONTROL: 'true'
 
     steps:
-      - name: Checkout
+      - name: Checkout exact Defender base
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Select AMS 1.11.2-compatible LDN base
-        run: |
-          set -eu
-          git -C ldn_mitm fetch --no-tags origin 2fe07817eeea06b712009395f8bbcb2a02d30979
-          git -C ldn_mitm checkout --detach 2fe07817eeea06b712009395f8bbcb2a02d30979
-          git -C ldn_mitm submodule sync --recursive
-          git -C ldn_mitm submodule update --init --recursive
-
-      - name: Verify pinned sources
+      - name: Verify exact source pins
         run: |
           set -eu
           actual="$(git -C ldn_mitm rev-parse HEAD)"
           echo "ldn_mitm: $actual"
           test "$actual" = "2fe07817eeea06b712009395f8bbcb2a02d30979"
-          actual="$(git -C ldn_mitm/Atmosphere-libs rev-parse HEAD)"
-          echo "Atmosphere-libs: $actual"
-          test "$actual" = "272e2d3b49580544a0642bbe3f945d25f0ff3beb"
+
+          atmosphere_commit="$(sed -n 's/^[[:space:]]*commit = //p' ldn_mitm/Atmosphere-libs/.gitrepo)"
+          echo "Atmosphere-libs subrepo commit: $atmosphere_commit"
+          test "$atmosphere_commit" = "d3083af1827cd6ca2a96feb9316eb85cd01bae1f"
+
           test -f ldn_mitm/ldn_mitm/Makefile
           test -f ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk
           test -f ldn_mitm/Atmosphere-libs/libstratosphere/Makefile
 
-      - name: Restore Atmosphere library cache
-        id: atmosphere-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
-          key: atmosphere-libstratosphere-272e2d3-devkita64
-
-      - name: Build Atmosphere libraries
-        if: steps.atmosphere-cache.outputs.cache-hit != 'true'
+      - name: Force clean Atmosphere library rebuild
         working-directory: ldn_mitm/Atmosphere-libs
         run: |
           set -eu
           rm -f libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
+          make -C libstratosphere clean || true
           make -C libstratosphere nx_release
           test -s libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
 
-      - name: Verify Atmosphere library
-        run: |
-          set -eu
-          test -s ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
-          ls -lh ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
-
-      - name: Save Atmosphere library cache
-        if: always() && steps.atmosphere-cache.outputs.cache-hit != 'true'
+      - name: Save d3083af Atmosphere library cache
         uses: actions/cache/save@v4
+        continue-on-error: true
         with:
           path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
-          key: atmosphere-libstratosphere-272e2d3-devkita64
+          key: atmosphere-libstratosphere-d3083af-devkita64
 
-      - name: Build vanilla LDN control
+      - name: Build vanilla ldn_mitm.nsp
         working-directory: ldn_mitm/ldn_mitm
         run: |
           set -eu
-          git -C .. status --short
           make clean || true
           make -j2
           test -s ldn_mitm.nsp
           ls -lh ldn_mitm.nsp
 
-      - name: Package vanilla control
+      - name: Package exact vanilla control layout
         run: |
           set -eu
+          rm -rf dist
           mkdir -p dist/atmosphere/contents/4200000000000010/flags
           cp ldn_mitm/ldn_mitm/ldn_mitm.nsp dist/atmosphere/contents/4200000000000010/exefs.nsp
-          : > dist/atmosphere/contents/4200000000000010/flags/boot2.flag
           cp ldn_mitm/ldn_mitm/res/toolbox.json dist/atmosphere/contents/4200000000000010/toolbox.json
+          touch dist/atmosphere/contents/4200000000000010/flags/boot2.flag
+
           test -s dist/atmosphere/contents/4200000000000010/exefs.nsp
-          test -f dist/atmosphere/contents/4200000000000010/flags/boot2.flag
           test -s dist/atmosphere/contents/4200000000000010/toolbox.json
+          test -f dist/atmosphere/contents/4200000000000010/flags/boot2.flag
+
           cd dist
           zip -r ../ldn-vanilla-control.zip atmosphere
 
