@@ -27,11 +27,11 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Select known-good ldn_mitm nightly base
+      - name: Select AMS 1.11.2-compatible LDN base
         run: |
           set -eu
-          git -C ldn_mitm fetch --no-tags origin 9a2639eff5b2e60065be3dfae69c46de6c3d7648
-          git -C ldn_mitm checkout --detach 9a2639eff5b2e60065be3dfae69c46de6c3d7648
+          git -C ldn_mitm fetch --no-tags origin 2fe07817eeea06b712009395f8bbcb2a02d30979
+          git -C ldn_mitm checkout --detach 2fe07817eeea06b712009395f8bbcb2a02d30979
           git -C ldn_mitm submodule sync --recursive
           git -C ldn_mitm submodule update --init --recursive
 
@@ -40,10 +40,10 @@ jobs:
           set -eu
           actual="$(git -C ldn_mitm rev-parse HEAD)"
           echo "ldn_mitm: $actual"
-          test "$actual" = "9a2639eff5b2e60065be3dfae69c46de6c3d7648"
+          test "$actual" = "2fe07817eeea06b712009395f8bbcb2a02d30979"
           actual="$(git -C ldn_mitm/Atmosphere-libs rev-parse HEAD)"
           echo "Atmosphere-libs: $actual"
-          test "$actual" = "82f1553c4c7e68364f7e630b1c68f2aee8681dee"
+          test "$actual" = "272e2d3b49580544a0642bbe3f945d25f0ff3beb"
           test -f ldn_mitm/ldn_mitm/Makefile
           test -f ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk
           test -f ldn_mitm/Atmosphere-libs/libstratosphere/Makefile
@@ -53,7 +53,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
-          key: atmosphere-libstratosphere-82f1553-devkita64
+          key: atmosphere-libstratosphere-272e2d3-devkita64
 
       - name: Build Atmosphere libraries
         if: steps.atmosphere-cache.outputs.cache-hit != 'true'
@@ -75,7 +75,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
-          key: atmosphere-libstratosphere-82f1553-devkita64
+          key: atmosphere-libstratosphere-272e2d3-devkita64
 
       - name: Build vanilla LDN control
         working-directory: ldn_mitm/ldn_mitm
