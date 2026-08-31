@@ -29,8 +29,8 @@ ANCHORS = {
         "int ret = ::connect(this->tcp->getFd(), (struct sockaddr *)&addr, sizeof(addr));",
         "rc = nifmGetCurrentIpAddress(&ipAddress);",
         "rc = nifmGetCurrentIpAddress(&ip);",
-        "ScopedNifmServiceTypeSetter setter(nifm::ServiceType::System);",
-        "nifmGetCurrentIpConfigInfo(address.GetPointer(), netmask.GetPointer(), &gateway, &primary_dns, &secondary_dns);",
+        "u32 address, netmask, gateway, primary_dns, secondary_dns;",
+        "Result rc = nifmGetCurrentIpConfigInfo(&address, &netmask, &gateway, &primary_dns, &secondary_dns);",
     ],
     "ldn_icommunication.cpp": [
         "Result ICommunicationService::Initialize(const sf::ClientProcessId &client_process_id)",
