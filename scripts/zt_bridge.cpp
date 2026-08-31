@@ -1,5 +1,6 @@
 #include "zt_bridge.hpp"
 #include "debug.hpp"
+#include <ZeroTierSockets.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <stdio.h>
@@ -7,8 +8,21 @@
 
 namespace ztbridge {
 
+static constexpr const char *ConfigDir = "sdmc:/config/switch-ldn-zt";
+static bool gStarted = false;
+
 int init() {
-    LogFormat("ZT-LDN: init isolation stub (no zts_* calls)");
+    if (gStarted) return 0;
+
+    int rc = zts_init_from_storage(ConfigDir);
+    LogFormat("ZT-LDN: init_from_storage rc=%d", rc);
+    if (rc != ZTS_ERR_OK) return rc;
+
+    rc = zts_node_start();
+    LogFormat("ZT-LDN: node_start rc=%d", rc);
+    if (rc != ZTS_ERR_OK) return rc;
+
+    gStarted = true;
     return 0;
 }
 
