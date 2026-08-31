@@ -6,9 +6,8 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 LDN = ROOT / "ldn_mitm" / "ldn_mitm"
 SRC = LDN / "source"
-ZT_INC = ROOT / "third_party" / "libzt" / "include"
-ZT_LIB = ROOT / "third_party" / "libzt" / "lib"
 STUBS_ONLY = True
+EXPECTED_LDN = "2fe07817eeea06b712009395f8bbcb2a02d30979"
 
 
 def replace(path, old, new):
@@ -37,8 +36,7 @@ def replace_function(path, signature, new_body):
     depth = 0
     end = None
     for i in range(brace, len(text)):
-        if text[i] == "{":
-            depth += 1
+        if text[i] == "{": depth += 1
         elif text[i] == "}":
             depth -= 1
             if depth == 0:
@@ -46,18 +44,18 @@ def replace_function(path, signature, new_body):
                 break
     if end is None:
         raise SystemExit(f"patch function has unbalanced braces: {path}: {signature!r}")
-    replacement = signature + " " + new_body
-    path.write_text(text[:start] + replacement + text[end:])
+    path.write_text(text[:start] + signature + " " + new_body + text[end:])
 
 
 def main():
     if not STUBS_ONLY:
         raise SystemExit("This build mode is stubs-only; real libzt is intentionally disabled")
 
-    # Verify anchors against the exact Defender v1.21.2 source before modifying it.
     subprocess.run(["python3", str(ROOT / "scripts" / "anchor_check_defender.py")], check=True)
+    actual = subprocess.check_output(["git", "-C", str(ROOT / "ldn_mitm"), "rev-parse", "HEAD"], text=True).strip()
+    if actual != EXPECTED_LDN:
+        raise SystemExit(f"wrong ldn_mitm commit: {actual} != {EXPECTED_LDN}")
 
-    # Never require or copy real libzt in the stubs-first build.
     shutil.copy2(ROOT / "scripts" / "zt_bridge.hpp", SRC / "zt_bridge.hpp")
     shutil.copy2(ROOT / "scripts" / "zt_stubs.cpp", SRC / "zt_stubs.cpp")
 
@@ -109,8 +107,27 @@ def main():
     replace(ld, '            if (listen(fd, 10) != 0) {', '            if (ztbridge::listen(fd, 10) != 0) {')
     replace(ld, '        fd = ::socket(AF_INET, SOCK_DGRAM, 0);', '        fd = ztbridge::socket(AF_INET, SOCK_DGRAM, 0);')
     replace(ld, '        int ret = ::connect(this->tcp->getFd(), (struct sockaddr *)&addr, sizeof(addr));', '        int ret = ztbridge::connect(this->tcp->getFd(), &addr);')
-    replace(ld, '        Result rc = nifmGetCurrentIpAddress(&ipAddress);\n        if (R_FAILED(rc))\n        {\n            return rc;\n        }\n        ipAddress = ntohl(ipAddress);', '        Result rc = ztbridge::local_ip_host_order(&ipAddress);\n        if (R_FAILED(rc)) {\n            return rc;\n        }')
-    replace(ld, '        Result rc = nifmGetCurrentIpAddress(&ip);\n        if (R_SUCCEEDED(rc)) {\n            ip = ntohl(ip);\n            memcpy(mac->raw + 2, &ip, sizeof(ip));\n        }\n\n        return rc;', '        Result rc = ztbridge::local_ip_host_order(&ip);\n        if (R_SUCCEEDED(rc)) {\n            memcpy(mac->raw + 2, &ip, sizeof(ip));\n        }\n        return rc;')
+    # Defender v1.21.2 exact getNodeInfo/getFakeMac blocks use `rc =`, not `Result rc =`.
+    replace(ld, '''        rc = nifmGetCurrentIpAddress(&ipAddress);
+        if (R_FAILED(rc))
+        {
+            return rc;
+        }
+        ipAddress = ntohl(ipAddress);''', '''        rc = ztbridge::local_ip_host_order(&ipAddress);
+        if (R_FAILED(rc))
+        {
+            return rc;
+        }''')
+    replace(ld, '''        rc = nifmGetCurrentIpAddress(&ip);
+        if (R_SUCCEEDED(rc)) {
+            ip = ntohl(ip);
+            memcpy(mac->raw + 2, &ip, sizeof(ip));
+        }
+        return rc;''', '''        rc = ztbridge::local_ip_host_order(&ip);
+        if (R_SUCCEEDED(rc)) {
+            memcpy(mac->raw + 2, &ip, sizeof(ip));
+        }
+        return rc;''')
 
     li = SRC / "ldn_icommunication.cpp"
     replace(li, '#include <arpa/inet.h>\n', '#include <arpa/inet.h>\n#include "zt_bridge.hpp"\n')
@@ -140,10 +157,7 @@ def main():
         if 'zt_stubs.cpp' not in text:
             text = text.replace('$(SOURCES)', '$(SOURCES) source/zt_stubs.cpp')
     mk.write_text(text)
-
-    print("LDN-ZT stubs-first patch applied")
-    print("No libzt.a / no -lzt")
-    print("ztbridge::init() remains in ICommunicationService::Initialize")
+    print("LDN-ZT stubs-first patch applied; no libzt.a / no -lzt")
 
 if __name__ == '__main__':
     main()
