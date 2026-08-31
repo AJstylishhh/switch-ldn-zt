@@ -49,11 +49,18 @@ jobs:
       - name: Verify Defender v1.21.2 patch anchors
         run: python3 scripts/anchor_check_defender.py
 
-      - name: Force clean Atmosphere library rebuild
+      - name: Restore Atmosphere libstratosphere cache
+        id: atmosphere-cache
+        uses: actions/cache@v4
+        with:
+          path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
+          key: atmosphere-libstratosphere-d3083af-devkita64
+
+      - name: Build Atmosphere libraries on cache miss
+        if: steps.atmosphere-cache.outputs.cache-hit != 'true'
         working-directory: ldn_mitm/Atmosphere-libs
         run: |
           set -eu
-          rm -f libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
           make -C libstratosphere clean || true
           make -C libstratosphere nx_release
           test -s libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
@@ -62,8 +69,9 @@ jobs:
         run: |
           set -eu
           python3 scripts/patch-ldn-zt.py
+          test -f ldn_mitm/ldn_mitm/source/zt_stubs.cpp
+          test -f ldn_mitm/ldn_mitm/source/zt_bridge.hpp
           ! grep -R -- '-lzt' ldn_mitm/ldn_mitm/Makefile
-          grep -q 'zt_stubs.cpp' ldn_mitm/ldn_mitm/Makefile
           test ! -f ldn_mitm/ldn_mitm/source/zt_bridge.cpp
           test ! -f ldn_mitm/ldn_mitm/source/errno_compat.c
           test ! -f third_party/libzt/lib/libzt.a
