@@ -115,7 +115,7 @@ def main():
     }''')
     replace(ld, '        fd = ::socket(AF_INET, SOCK_STREAM, 0);', '        fd = ztbridge::socket(AF_INET, SOCK_STREAM, 0);')
     replace_all(ld, '            if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {', '            if (ztbridge::bind(fd, &addr) != 0) {', minimum=2)
-    replace(ld, '            if (listen(fd, 10) != 0) {', '            if (ztbridge::listen(fd, 10) != 0);')
+    replace(ld, '            if (listen(fd, 10) != 0) {', '            if (ztbridge::listen(fd, 10) != 0) {')
     replace(ld, '        fd = ::socket(AF_INET, SOCK_DGRAM, 0);', '        fd = ztbridge::socket(AF_INET, SOCK_DGRAM, 0);')
     replace(ld, '        int ret = ::connect(this->tcp->getFd(), (struct sockaddr *)&addr, sizeof(addr));', '        int ret = ztbridge::connect(this->tcp->getFd(), &addr);')
     replace(ld, '''        rc = nifmGetCurrentIpAddress(&ipAddress);
@@ -148,7 +148,7 @@ def main():
     replace(li, '        R_TRY(lanDiscovery.initialize([&](){', '''        Result zt_rc = ztbridge::init();
         if (R_FAILED(zt_rc)) {
             LogFormat("LDN-ZT: init failed rc=%x", zt_rc);
-            return zt_rc;
+            return MAKERESULT(0xFD, 0x50);
         }
 
         R_TRY(lanDiscovery.initialize([&](){''')
@@ -167,11 +167,18 @@ def main():
     mk = LDN / "Makefile"
     text = mk.read_text()
     libzt_dir = ZT_LIB.parent.resolve().as_posix()
-    if "LIBDIRS += " not in text or "third_party/libzt" not in text:
+    if "third_party/libzt" not in text:
         text += f"\n# Real ZeroTier static library\nLIBDIRS += {libzt_dir}\nLIBS += -lzt -lnx\n"
     elif "LIBS += -lzt -lnx" not in text:
         text += "\nLIBS += -lzt -lnx\n"
     mk.write_text(text)
+
+    if (SRC / "zt_stubs.cpp").exists():
+        raise SystemExit("zt_stubs.cpp must not be present in real-libzt mode")
+    if "-lzt" not in mk.read_text():
+        raise SystemExit("-lzt missing from LDN Makefile in real-libzt mode")
+    if "third_party/libzt" not in mk.read_text():
+        raise SystemExit("third_party/libzt missing from LDN Makefile")
 
     print("LDN real-libzt patch applied")
     print(f"libzt Makefile directory: {libzt_dir}")
