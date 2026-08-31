@@ -6,8 +6,11 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 LDN = ROOT / "ldn_mitm" / "ldn_mitm"
 SRC = LDN / "source"
-STUBS_ONLY = True
+ZT_INC = ROOT / "third_party" / "libzt" / "include"
+ZT_LIB = ROOT / "third_party" / "libzt" / "lib"
+STUBS_ONLY = False
 EXPECTED_LDN = "2fe07817eeea06b712009395f8bbcb2a02d30979"
+EXPECTED_LIBZT = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
 
 
 def replace(path, old, new):
@@ -48,16 +51,26 @@ def replace_function(path, signature, new_body):
 
 
 def main():
-    if not STUBS_ONLY:
-        raise SystemExit("This build mode is stubs-only; real libzt is intentionally disabled")
+    if STUBS_ONLY:
+        raise SystemExit("STUBS_ONLY must be false for the real-libzt build")
 
-    subprocess.run(["python3", str(ROOT / "scripts" / "anchor_check_defender.py")], check=True)
-    actual = subprocess.check_output(["git", "-C", str(ROOT / "ldn_mitm"), "rev-parse", "HEAD"], text=True).strip()
-    if actual != EXPECTED_LDN:
-        raise SystemExit(f"wrong ldn_mitm commit: {actual} != {EXPECTED_LDN}")
+    actual_ldn = subprocess.check_output(["git", "-C", str(ROOT / "ldn_mitm"), "rev-parse", "HEAD"], text=True).strip()
+    if actual_ldn != EXPECTED_LDN:
+        raise SystemExit(f"wrong ldn_mitm commit: {actual_ldn} != {EXPECTED_LDN}")
+    actual_zt = subprocess.check_output(["git", "-C", str(ROOT / "libzt"), "rev-parse", "HEAD"], text=True).strip()
+    if actual_zt != EXPECTED_LIBZT:
+        raise SystemExit(f"wrong libzt commit: {actual_zt} != {EXPECTED_LIBZT}")
+
+    if not (ZT_INC / "ZeroTierSockets.h").is_file():
+        raise SystemExit("libzt headers missing")
+    if not (ZT_LIB / "libzt.a").is_file():
+        raise SystemExit("libzt.a missing")
 
     shutil.copy2(ROOT / "scripts" / "zt_bridge.hpp", SRC / "zt_bridge.hpp")
-    shutil.copy2(ROOT / "scripts" / "zt_stubs.cpp", SRC / "zt_stubs.cpp")
+    shutil.copy2(ROOT / "scripts" / "zt_bridge.cpp", SRC / "zt_bridge.cpp")
+    shutil.copy2(ROOT / "scripts" / "errno_compat.c", SRC / "errno_compat.c")
+    if (SRC / "zt_stubs.cpp").exists():
+        (SRC / "zt_stubs.cpp").unlink()
 
     main_cpp = SRC / "ldnmitm_main.cpp"
     replace(main_cpp, '        R_ABORT_UNLESS(log::Initialize());\n        LogFormat("main");', '        R_ABORT_UNLESS(log::Initialize());\n        LogFormat("LDN-ZT: Main entered");')
@@ -65,21 +78,19 @@ def main():
 
     lp = SRC / "lan_protocol.cpp"
     replace(lp, '#include <stratosphere.hpp>\n', '#include <stratosphere.hpp>\n#include "zt_bridge.hpp"\n')
-    old_poll = '''    struct pollfd pfds[nfds];
+    replace(lp, '''    struct pollfd pfds[nfds];
     for (size_t i = 0; i < nfds; i++) {
         pfds[i].fd = fds[i] ? fds[i]->getFd() : -1;
         pfds[i].events = POLLIN;
         pfds[i].revents = 0;
     }
-    int rc = poll(pfds, nfds, timeout);'''
-    new_poll = '''    ztbridge::PollFd pfds[nfds];
+    int rc = poll(pfds, nfds, timeout);''', '''    ztbridge::PollFd pfds[nfds];
     for (size_t i = 0; i < nfds; i++) {
         pfds[i].fd = fds[i] ? fds[i]->getFd() : -1;
         pfds[i].events = ZT_POLLIN;
         pfds[i].revents = 0;
     }
-    int rc = ztbridge::poll(pfds, nfds, timeout);'''
-    replace(lp, old_poll, new_poll)
+    int rc = ztbridge::poll(pfds, nfds, timeout);''')
     replace(lp, '        const struct pollfd &pfd = pfds[i];', '        const ztbridge::PollFd &pfd = pfds[i];')
     replace(lp, 'if (pfd.revents & (POLLERR | POLLHUP))', 'if (pfd.revents & (ZT_POLLERR | ZT_POLLHUP | ZT_POLLNVAL))')
     replace(lp, 'else if (pfd.revents & (POLLIN | POLLPRI))', 'else if (pfd.revents & (ZT_POLLIN | ZT_POLLPRI))')
@@ -104,7 +115,7 @@ def main():
     }''')
     replace(ld, '        fd = ::socket(AF_INET, SOCK_STREAM, 0);', '        fd = ztbridge::socket(AF_INET, SOCK_STREAM, 0);')
     replace_all(ld, '            if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {', '            if (ztbridge::bind(fd, &addr) != 0) {', minimum=2)
-    replace(ld, '            if (listen(fd, 10) != 0) {', '            if (ztbridge::listen(fd, 10) != 0) {')
+    replace(ld, '            if (listen(fd, 10) != 0) {', '            if (ztbridge::listen(fd, 10) != 0);')
     replace(ld, '        fd = ::socket(AF_INET, SOCK_DGRAM, 0);', '        fd = ztbridge::socket(AF_INET, SOCK_DGRAM, 0);')
     replace(ld, '        int ret = ::connect(this->tcp->getFd(), (struct sockaddr *)&addr, sizeof(addr));', '        int ret = ztbridge::connect(this->tcp->getFd(), &addr);')
     replace(ld, '''        rc = nifmGetCurrentIpAddress(&ipAddress);
@@ -134,8 +145,10 @@ def main():
 
     li = SRC / "ldn_icommunication.cpp"
     replace(li, '#include <arpa/inet.h>\n', '#include <arpa/inet.h>\n#include "zt_bridge.hpp"\n')
-    replace(li, '        R_TRY(lanDiscovery.initialize([&](){', '''        if (ztbridge::init() != 0) {
-            return MAKERESULT(0xFD, 0x50);
+    replace(li, '        R_TRY(lanDiscovery.initialize([&](){', '''        Result zt_rc = ztbridge::init();
+        if (R_FAILED(zt_rc)) {
+            LogFormat("LDN-ZT: init failed rc=%x", zt_rc);
+            return zt_rc;
         }
 
         R_TRY(lanDiscovery.initialize([&](){''')
@@ -151,19 +164,18 @@ def main():
         return rc;
     }''')
 
-    # Defender Makefile discovers every .cpp in $(SOURCES) automatically.
-    # Copying zt_stubs.cpp into source/ is therefore sufficient; never mutate
-    # $(SOURCES) or inject an individual source filename into the Makefile.
     mk = LDN / "Makefile"
-    if '-lzt' in mk.read_text():
-        raise SystemExit("-lzt remains in Defender Makefile; STUBS_ONLY requires no libzt link")
+    text = mk.read_text()
+    libzt_dir = ZT_LIB.parent.resolve().as_posix()
+    if "LIBDIRS += " not in text or "third_party/libzt" not in text:
+        text += f"\n# Real ZeroTier static library\nLIBDIRS += {libzt_dir}\nLIBS += -lzt -lnx\n"
+    elif "LIBS += -lzt -lnx" not in text:
+        text += "\nLIBS += -lzt -lnx\n"
+    mk.write_text(text)
 
-    if not (SRC / "zt_stubs.cpp").is_file():
-        raise SystemExit("zt_stubs.cpp was not copied into Defender source/")
-    if not (SRC / "zt_bridge.hpp").is_file():
-        raise SystemExit("zt_bridge.hpp was not copied into Defender source/")
-
-    print("LDN-ZT stubs-first patch applied; no libzt.a / no -lzt")
+    print("LDN real-libzt patch applied")
+    print(f"libzt Makefile directory: {libzt_dir}")
+    print("errno_compat.c supplied as pure C")
 
 if __name__ == '__main__':
     main()
