@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import shutil
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 LDN = ROOT / "ldn_mitm" / "ldn_mitm"
 SRC = LDN / "source"
 ZT_INC = ROOT / "third_party" / "libzt" / "include"
 ZT_LIB = ROOT / "third_party" / "libzt" / "lib"
+STUBS_ONLY = True
 
 
 def replace(path, old, new):
@@ -35,7 +37,8 @@ def replace_function(path, signature, new_body):
     depth = 0
     end = None
     for i in range(brace, len(text)):
-        if text[i] == "{": depth += 1
+        if text[i] == "{":
+            depth += 1
         elif text[i] == "}":
             depth -= 1
             if depth == 0:
@@ -48,12 +51,13 @@ def replace_function(path, signature, new_body):
 
 
 def main():
-    isolation = True
-    if not isolation:
-        if not (ZT_INC / "ZeroTierSockets.h").is_file(): raise SystemExit("libzt headers missing")
-        if not (ZT_LIB / "libzt.a").is_file(): raise SystemExit("libzt.a missing")
-        shutil.copy2(ROOT / "scripts" / "zt_bridge.cpp", SRC / "zt_bridge.cpp")
-        shutil.copy2(ROOT / "scripts" / "errno_compat.c", SRC / "errno_compat.c")
+    if not STUBS_ONLY:
+        raise SystemExit("This build mode is stubs-only; real libzt is intentionally disabled")
+
+    # Verify anchors against the exact Defender v1.21.2 source before modifying it.
+    subprocess.run(["python3", str(ROOT / "scripts" / "anchor_check_defender.py")], check=True)
+
+    # Never require or copy real libzt in the stubs-first build.
     shutil.copy2(ROOT / "scripts" / "zt_bridge.hpp", SRC / "zt_bridge.hpp")
     shutil.copy2(ROOT / "scripts" / "zt_stubs.cpp", SRC / "zt_stubs.cpp")
 
@@ -129,26 +133,17 @@ def main():
 
     mk = LDN / "Makefile"
     text = mk.read_text()
-    if isolation:
-        text = text.replace('LIBS += -lzt -lnx', 'LIBS += -lnx\n')
+    if '-lzt' in text:
+        text = text.replace('LIBS += -lzt -lnx', 'LIBS += -lnx').replace('LIBS += -lzt', 'LIBS += -lnx')
+    if 'zt_stubs.cpp' not in text:
+        text = text.replace('source/zt_bridge.cpp', 'source/zt_stubs.cpp')
         if 'zt_stubs.cpp' not in text:
-            text = text.replace('source/zt_bridge.cpp', 'source/zt_stubs.cpp')
-            if 'zt_stubs.cpp' not in text:
-                text = text.replace('$(SOURCES)', '$(SOURCES) source/zt_stubs.cpp')
-        mk.write_text(text)
-    else:
-        libzt_dir = (ROOT / "third_party" / "libzt").resolve().as_posix()
-        if "LIBDIRS += " not in text or "third_party/libzt" not in text:
-            text = text.replace('CXXFLAGS\t+= $(VERSION_DEFINES)\n', 'CXXFLAGS\t+= $(VERSION_DEFINES)\n' f'LIBDIRS += {libzt_dir}\n' 'LIBS += -lzt -lnx\n')
-            mk.write_text(text)
-        elif "LIBS += -lzt -lnx" not in text:
-            text = text.replace('LIBS += -lzt\n', 'LIBS += -lzt -lnx\n')
-            mk.write_text(text)
+            text = text.replace('$(SOURCES)', '$(SOURCES) source/zt_stubs.cpp')
+    mk.write_text(text)
 
-    print("LDN ZeroTier patch applied")
-    print("ISOLATION BUILD: zt_stubs.cpp, no libzt.a")
-    print("boot diagnostics: Main entered / mitm registered")
-    print("ztbridge init remains lazy")
+    print("LDN-ZT stubs-first patch applied")
+    print("No libzt.a / no -lzt")
+    print("ztbridge::init() remains in ICommunicationService::Initialize")
 
 if __name__ == '__main__':
     main()
