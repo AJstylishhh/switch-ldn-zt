@@ -117,15 +117,19 @@ def main():
         {
             return rc;
         }''')
-    replace(ld, '''        rc = nifmGetCurrentIpAddress(&ip);
+    replace(ld, '''        u32 ip;
+        rc = nifmGetCurrentIpAddress(&ip);
         if (R_SUCCEEDED(rc)) {
             ip = ntohl(ip);
             memcpy(mac->raw + 2, &ip, sizeof(ip));
         }
-        return rc;''', '''        rc = ztbridge::local_ip_host_order(&ip);
+
+        return rc;''', '''        u32 ip;
+        rc = ztbridge::local_ip_host_order(&ip);
         if (R_SUCCEEDED(rc)) {
             memcpy(mac->raw + 2, &ip, sizeof(ip));
         }
+
         return rc;''')
 
     li = SRC / "ldn_icommunication.cpp"
@@ -151,17 +155,13 @@ def main():
     # Copying zt_stubs.cpp into source/ is therefore sufficient; never mutate
     # $(SOURCES) or inject an individual source filename into the Makefile.
     mk = LDN / "Makefile"
-    text = mk.read_text()
-    if '-lzt' in text:
-        text = text.replace('LIBS += -lzt -lnx', 'LIBS += -lnx').replace('LIBS += -lzt', 'LIBS += -lnx')
-    mk.write_text(text)
+    if '-lzt' in mk.read_text():
+        raise SystemExit("-lzt remains in Defender Makefile; STUBS_ONLY requires no libzt link")
 
     if not (SRC / "zt_stubs.cpp").is_file():
         raise SystemExit("zt_stubs.cpp was not copied into Defender source/")
     if not (SRC / "zt_bridge.hpp").is_file():
         raise SystemExit("zt_bridge.hpp was not copied into Defender source/")
-    if '-lzt' in mk.read_text():
-        raise SystemExit("-lzt remains in Defender Makefile")
 
     print("LDN-ZT stubs-first patch applied; no libzt.a / no -lzt")
 
