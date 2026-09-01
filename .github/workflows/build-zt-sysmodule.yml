@@ -51,6 +51,8 @@ jobs:
           git -C libzt fetch --no-tags origin 76c138bb916bc3a20d356bd4ef8e2195212ddb1e
           git -C libzt checkout --detach 76c138bb916bc3a20d356bd4ef8e2195212ddb1e
 
+          # Atmosphere-libs is a git-subrepo, not a nested Git working tree.
+          # Its pinned revision is recorded in .gitrepo and is validated below.
           if [ -d ldn_mitm/Atmosphere-libs/.git ]; then
             git -C ldn_mitm/Atmosphere-libs fetch --no-tags origin d3083af1827cd6ca2a96feb9316eb85cd01bae1f
             git -C ldn_mitm/Atmosphere-libs checkout --detach d3083af1827cd6ca2a96feb9316eb85cd01bae1f
@@ -68,15 +70,22 @@ jobs:
           test "$LDN_SHA" = "2fe07817eeea06b712009395f8bbcb2a02d30979"
           test "$LIBZT_SHA" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
 
-          if [ -d ldn_mitm/Atmosphere-libs/.git ]; then
+          ATMOSPHERE_PIN="d3083af1827cd6ca2a96feb9316eb85cd01bae1f"
+          if [ -f ldn_mitm/Atmosphere-libs/.gitrepo ]; then
+            ATMOSPHERE_SHA="$(sed -n 's/^[[:space:]]*commit = //p' ldn_mitm/Atmosphere-libs/.gitrepo)"
+            echo "Atmosphere-libs .gitrepo SHA: $ATMOSPHERE_SHA"
+            test "$ATMOSPHERE_SHA" = "$ATMOSPHERE_PIN"
+          elif [ -d ldn_mitm/Atmosphere-libs/.git ]; then
             ATMOSPHERE_SHA="$(git -C ldn_mitm/Atmosphere-libs rev-parse HEAD)"
-            echo "Atmosphere-libs SHA: $ATMOSPHERE_SHA"
-            test "$ATMOSPHERE_SHA" = "d3083af1827cd6ca2a96feb9316eb85cd01bae1f"
+            echo "Atmosphere-libs Git SHA: $ATMOSPHERE_SHA"
+            test "$ATMOSPHERE_SHA" = "$ATMOSPHERE_PIN"
           else
-            echo "Atmosphere-libs is not a Git working tree; using pinned SHA d3083af1827cd6ca2a96feb9316eb85cd01bae1f for the cache/build contract."
+            echo "Atmosphere-libs is neither a git-subrepo nor a Git working tree; expected pinned SHA $ATMOSPHERE_PIN"
+            exit 1
           fi
 
           test -f ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk
+          test -f ldn_mitm/Atmosphere-libs/libstratosphere/Makefile
           test -f zt_sysmodule/Makefile
           grep -q '../ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk' zt_sysmodule/Makefile
           ! grep -q 'zt_sysmodule/ldn_mitm/Atmosphere-libs' zt_sysmodule/Makefile
