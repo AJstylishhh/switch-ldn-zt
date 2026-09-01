@@ -3,9 +3,9 @@
 namespace ams {
 
 void Main() {
-    R_ABORT_UNLESS(log::Initialize());
-    LogFormat("ZT-SYS: B1 main entered; libzt linked, no zts_* calls");
-
+    // Sys B is intentionally a minimal boot/link isolation target.
+    // Do not initialize Atmosphere logging here: this target does not
+    // provide the log namespace used by the full LDN sysmodule.
     for (;;) {
         svcSleepThread(1000000000ULL);
     }
