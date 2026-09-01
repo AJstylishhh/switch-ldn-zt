@@ -9,13 +9,11 @@ TARGET := zerotier_sys
 BUILD := build
 SOURCES := source
 DATA :=
-INCLUDES := $(MAKEFILE_DIR)/../third_party/libzt/include
+INCLUDES :=
 
 TARGET_VERSION := 0.1.0-b1
 CFLAGS += -DZT_SYS_B1
 CXXFLAGS += -DZT_SYS_B1
-LIBDIRS += $(abspath $(MAKEFILE_DIR)/../third_party/libzt)
-LIBS += -lzt
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 
@@ -36,8 +34,8 @@ export LD := $(CXX)
 endif
 
 export OFILES := $(addsuffix .o,$(BINFILES)) $(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
-export INCLUDE := $(foreach dir,$(INCLUDES),-I$(dir)) $(foreach dir,$(LIBDIRS),-I$(dir)/include) $(foreach dir,$(AMS_LIBDIRS),-I$(dir)/include) -I$(CURDIR)/$(BUILD)
-export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib) $(foreach dir,$(AMS_LIBDIRS),-L$(dir)/lib) $(foreach dir,$(AMS_LIBDIRS),-L$(dir)/$(ATMOSPHERE_LIBRARY_DIR))
+export INCLUDE := $(foreach dir,$(INCLUDES),-I$(dir)) $(foreach dir,$(AMS_LIBDIRS),-I$(dir)/include) -I$(CURDIR)/$(BUILD)
+export LIBPATHS := $(foreach dir,$(AMS_LIBDIRS),-L$(dir)/lib) $(foreach dir,$(AMS_LIBDIRS),-L$(dir)/$(ATMOSPHERE_LIBRARY_DIR))
 export BUILD_EXEFS_SRC := $(TOPDIR)/$(EXEFS_SRC)
 export APP_JSON := $(TOPDIR)/res/app.json
 
