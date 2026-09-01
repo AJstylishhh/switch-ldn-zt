@@ -23,7 +23,7 @@ export VPATH := $(foreach dir,$(SOURCES),$(MAKEFILE_DIR)/$(dir)) $(foreach dir,$
 export DEPSDIR := $(CURDIR)/$(BUILD)
 
 CFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
-CPPFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
+CPPFILES := $(filter-out zt_compat.cpp,$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp))))
 SFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 BINFILES := $(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
 
@@ -55,8 +55,8 @@ DEPENDS := $(OFILES:.o=.d)
 all: $(OUTPUT).nsp
 $(OUTPUT).kip: $(OUTPUT).elf
 $(OUTPUT).nsp: $(OUTPUT).nso $(OUTPUT).npdm
-$(OUTPUT).nso: $(OUTPUT).elf
 $(OUTPUT).elf: $(OFILES)
+$(OUTPUT).nso: $(OUTPUT).elf
 
 $(OFILES): $(ATMOSPHERE_LIBRARIES_DIR)/libstratosphere/$(ATMOSPHERE_LIBRARY_DIR)/libstratosphere.a
 
