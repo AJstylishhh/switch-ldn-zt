@@ -1,5 +1,6 @@
 # Minimal Atmosphere sysmodule for isolating libzt from ldn_mitm.
 # Sys B: title 4200000000000011.
+# Phase 1: pure AMS skeleton. ZeroTier sources and -lzt are intentionally excluded.
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 ATMOSPHERE_LIBRARIES_DIR := $(abspath $(MAKEFILE_DIR)/../ldn_mitm/Atmosphere-libs)
@@ -22,16 +23,14 @@ export TOPDIR := $(MAKEFILE_DIR)
 export VPATH := $(foreach dir,$(SOURCES),$(MAKEFILE_DIR)/$(dir)) $(foreach dir,$(DATA),$(MAKEFILE_DIR)/$(dir))
 export DEPSDIR := $(CURDIR)/$(BUILD)
 
-CFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
-CPPFILES := $(filter-out zt_compat.cpp,$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp))))
-SFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
-BINFILES := $(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
+# Phase 1 intentionally compiles only main.cpp.
+# zt_compat.cpp and errno_compat.c return in later isolation phases.
+CFILES :=
+CPPFILES := main.cpp
+SFILES :=
+BINFILES :=
 
-ifeq ($(strip $(CPPFILES)),)
-export LD := $(CC)
-else
 export LD := $(CXX)
-endif
 
 export OFILES := $(addsuffix .o,$(BINFILES)) $(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
 export INCLUDE := $(foreach dir,$(INCLUDES),-I$(dir)) $(foreach dir,$(AMS_LIBDIRS),-I$(dir)/include) -I$(CURDIR)/$(BUILD)
