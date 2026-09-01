@@ -1,5 +1,6 @@
 {
   "name": "zerotier.sys",
+  "program_id": "0x4200000000000011",
   "title_id": "0x4200000000000011",
   "title_id_range_min": "0x4200000000000011",
   "title_id_range_max": "0x4200000000000011",
@@ -48,8 +49,8 @@
         "svcClearEvent": "0x12",
         "svcWaitSynchronization": "0x18",
         "svcGetSystemTick": "0x1e",
-        "svcOutputDebugString": "0x27",
         "svcGetInfo": "0x29",
+        "svcOutputDebugString": "0x27",
         "svcCreateEvent": "0x45",
         "svcSleepSystem": "0x4d",
         "svcCreateSharedMemory": "0x50",
