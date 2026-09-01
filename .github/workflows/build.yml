@@ -105,11 +105,19 @@ jobs:
           cp "$(find libzt/build-switch -type f -name 'libzt.a' | head -1)" third_party/libzt/lib/libzt.a
           test -s third_party/libzt/lib/libzt.a
 
+      - name: Verify Sys B libzt dependency before link
+        run: |
+          set -eu
+          test -s third_party/libzt/lib/libzt.a
+          test -f third_party/libzt/include/ZeroTierSockets.h
+          ls -lh third_party/libzt/lib/libzt.a
+
       - name: Build Sys B Phase 1
         run: |
           set -eu
           make -C zt_sysmodule clean
           make -C zt_sysmodule -j4
+          test -s zt_sysmodule/zerotier_sys.elf
           test -s zt_sysmodule/zerotier_sys.nsp
 
           rm -rf dist/atmosphere/contents/4200000000000011
@@ -122,7 +130,7 @@ jobs:
         run: |
           set -eu
           ! grep -R -n -E 'zts_init|zts_node_start|zts_net_join|zts_node_join|zts_' zt_sysmodule/source/main.cpp
-          grep -n -- 'LIBS += -lzt' zt_sysmodule/Makefile
+          grep -n -- 'LIBS += -lzt -lnx' zt_sysmodule/Makefile
           grep -n 'third_party/libzt' zt_sysmodule/Makefile
           test -s dist/atmosphere/contents/4200000000000011/exefs.nsp
           test -f dist/atmosphere/contents/4200000000000011/flags/boot2.flag
