@@ -1,4 +1,4 @@
-name: Build libzt for Nintendo Switch
+name: Build libzt and Sys B
 
 on:
   push:
@@ -12,19 +12,52 @@ jobs:
     container: devkitpro/devkita64:latest
 
     steps:
-      - name: Checkout
+      - name: Checkout pinned sources
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Verify checked-out sources
+      - name: Configure safe Git directories
         run: |
           set -eu
-          echo "Commit: $(git rev-parse HEAD)"
-          echo "libzt submodule: $(git -C libzt rev-parse HEAD)"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/ldn_mitm"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/libzt"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/ldn_mitm/Atmosphere-libs"
+
+      - name: Verify pinned sources
+        run: |
+          set -eu
+          test "$(git -C ldn_mitm rev-parse HEAD)" = "2fe07817eeea06b712009395f8bbcb2a02d30979"
+          test "$(git -C libzt rev-parse HEAD)" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
+          ATMOSPHERE_SHA="$(sed -n 's/^[[:space:]]*commit = //p' ldn_mitm/Atmosphere-libs/.gitrepo)"
+          test "$ATMOSPHERE_SHA" = "d3083af1827cd6ca2a96feb9316eb85cd01bae1f"
+          test -f ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk
           test -f libzt/CMakeLists.txt
-          test -f libzt/ext/ZeroTierOne/node/Node.cpp
-          test -f libzt/ext/endian.h
+          echo "ldn_mitm: $(git -C ldn_mitm rev-parse HEAD)"
+          echo "libzt:     $(git -C libzt rev-parse HEAD)"
+          echo "Atmosphere-libs .gitrepo: $ATMOSPHERE_SHA"
+
+      - name: Restore Atmosphere libstratosphere cache
+        id: atmosphere-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
+          key: atmosphere-libstratosphere-d3083af-devkita64
+
+      - name: Build libstratosphere on cache miss
+        if: steps.atmosphere-cache.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          make -C ldn_mitm/Atmosphere-libs/libstratosphere -j4
+          test -s ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
+
+      - name: Save Atmosphere libstratosphere cache
+        if: steps.atmosphere-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
+          key: atmosphere-libstratosphere-d3083af-devkita64
 
       - name: Verify devkitA64
         run: |
@@ -33,8 +66,6 @@ jobs:
           export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
           test -x "$DEVKITA64/bin/aarch64-none-elf-gcc"
           test -x "$DEVKITA64/bin/aarch64-none-elf-g++"
-          aarch64-none-elf-gcc --version
-          aarch64-none-elf-g++ --version
           test "$(aarch64-none-elf-gcc -dumpmachine)" = "aarch64-none-elf"
 
       - name: Configure libzt
@@ -56,76 +87,54 @@ jobs:
             -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port/include" \
             -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port/include"
 
-      - name: Verify Switch flags and lwIP port
-        working-directory: libzt
-        run: |
-          set -eu
-          grep -R -- "-D__SWITCH__" build-switch/CMakeFiles | head -20
-          grep -R -- "-DFD_SETSIZE=1024" build-switch/CMakeFiles | head -5
-          grep -R -- "LWIP_PROVIDE_ERRNO" build-switch/CMakeFiles | head -10
-          grep -R -- "ext/lwip-contrib/ports/unix/port/include" build-switch/CMakeFiles | head -20
-          test -f ext/lwip-contrib/ports/unix/port/include/arch/cc.h
-          test -f ext/lwip-contrib/ports/unix/port/include/arch/sys_arch.h
-          test -f ext/lwip/src/include/arch/cc.h
-
       - name: Build libzt static library
         working-directory: libzt
         run: |
           set -eu
           cmake --build build-switch --target zt-static --parallel 2 --verbose
-
-      - name: Verify artifact
-        working-directory: libzt
-        run: |
-          set -eu
-          export DEVKITA64=/opt/devkitpro/devkitA64
-          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
           LIB="$(find build-switch -type f -name 'libzt.a' | head -1)"
           test -n "$LIB"
           test -s "$LIB"
-          echo "Switch library: $LIB"
-          aarch64-none-elf-ar t "$LIB" | head -60
 
-      - name: Package Switch libzt
+      - name: Prepare isolated Sys B libzt dependency
         run: |
           set -eu
-          mkdir -p dist/libzt-switch/include dist/libzt-switch/lib
-          cp libzt/include/ZeroTierSockets.h dist/libzt-switch/include/
-          cp "$(find libzt/build-switch -type f -name 'libzt.a' | head -1)" dist/libzt-switch/lib/
-          cp cmake/switch.toolchain.cmake dist/libzt-switch/
-          tar -C dist -czf libzt-switch.tar.gz libzt-switch
-
-      - name: Upload Switch libzt artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: libzt-switch
-          path: libzt-switch.tar.gz
-          retention-days: 14
-
-      - name: Prepare Switch homebrew dependency
-        run: |
-          set -eu
-          rm -rf /tmp/libzt-switch third_party/libzt
-          mkdir -p /tmp/libzt-switch third_party
-          tar -xzf libzt-switch.tar.gz -C /tmp/libzt-switch
-          mv /tmp/libzt-switch/libzt-switch third_party/libzt
-          test -f third_party/libzt/include/ZeroTierSockets.h
+          rm -rf third_party/libzt
+          mkdir -p third_party/libzt/include third_party/libzt/lib
+          cp libzt/include/ZeroTierSockets.h third_party/libzt/include/
+          cp "$(find libzt/build-switch -type f -name 'libzt.a' | head -1)" third_party/libzt/lib/libzt.a
           test -s third_party/libzt/lib/libzt.a
 
-      - name: Build ZeroTier Switch NRO
+      - name: Build Sys B Phase 1
         run: |
           set -eu
-          make clean
-          make
-          test -s zerotier-switch.nro
-          test -s zerotier-switch.nacp
-          ls -lh zerotier-switch.nro zerotier-switch.nacp
+          make -C zt_sysmodule clean
+          make -C zt_sysmodule -j4
+          test -s zt_sysmodule/zerotier_sys.nsp
 
-      - name: Upload ZeroTier Switch NRO
+          rm -rf dist/atmosphere/contents/4200000000000011
+          mkdir -p dist/atmosphere/contents/4200000000000011/flags
+          cp zt_sysmodule/zerotier_sys.nsp dist/atmosphere/contents/4200000000000011/exefs.nsp
+          cp zt_sysmodule/res/toolbox.json dist/atmosphere/contents/4200000000000011/toolbox.json
+          : > dist/atmosphere/contents/4200000000000011/flags/boot2.flag
+
+      - name: Verify Sys B Phase 1 isolation
+        run: |
+          set -eu
+          ! grep -R -n -E 'zts_init|zts_node_start|zts_net_join|zts_node_join|zts_' zt_sysmodule/source/main.cpp
+          grep -n -- 'LIBS += -lzt' zt_sysmodule/Makefile
+          grep -n 'third_party/libzt' zt_sysmodule/Makefile
+          test -s dist/atmosphere/contents/4200000000000011/exefs.nsp
+          test -f dist/atmosphere/contents/4200000000000011/flags/boot2.flag
+
+      - name: Package Sys B artifact
+        run: |
+          set -eu
+          tar -C dist -czf zerotier-sysmodule-phase1.tar.gz atmosphere
+
+      - name: Upload Sys B Phase 1 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zerotier-switch-nro
-          path: |
-            zerotier-switch.nro
-            zerotier-switch.nacp
+          name: zerotier-sysmodule-phase1
+          path: zerotier-sysmodule-phase1.tar.gz
           retention-days: 14
