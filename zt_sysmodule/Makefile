@@ -15,7 +15,7 @@ TARGET_VERSION := 0.1.0-b1
 CFLAGS += -DZT_SYS_B1
 CXXFLAGS += -DZT_SYS_B1
 LIBDIRS += $(abspath $(MAKEFILE_DIR)/../third_party/libzt)
-LIBS += -Wl,--whole-archive -lzt -Wl,--no-whole-archive
+LIBS += -lzt
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 
