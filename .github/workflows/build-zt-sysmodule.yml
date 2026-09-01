@@ -135,18 +135,14 @@ jobs:
           cp "$(find build-switch -type f -name 'libzt.a' | head -1)" "$GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a"
           test -s "$GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a"
 
-      - name: Build Sys B B1
+      - name: Build Sys B B1 control (NO libzt link)
         working-directory: zt_sysmodule
         run: |
           set -eu
-          test -f source/zt_compat.cpp
-          test -f source/errno_compat.c
-          grep -q -- '-lzt' Makefile
-          grep -qx 'int errno = 0;' source/errno_compat.c
-          grep -q 'extern "C" int pipe' source/zt_compat.cpp
-          grep -q 'ATMOSPHERE_LIBRARIES_DIR' Makefile
-          grep -q 'include .*ATMOSPHERE_LIBRARIES_DIR.*config/templates/stratosphere.mk' Makefile
-          ! grep -q 'zt_sysmodule/ldn_mitm/Atmosphere-libs' Makefile
+          test -f source/main.cpp
+          grep -q 'ZT_SYS_B1' Makefile
+          ! grep -q -- '-lzt' Makefile
+          ! grep -q -- 'LIBDIRS.*libzt' Makefile
           make clean || true
           make -j2
           test -s zerotier_sys.nsp
