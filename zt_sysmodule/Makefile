@@ -20,7 +20,7 @@ CFLAGS += -DZT_SYS_B1
 CXXFLAGS += -DZT_SYS_B1
 
 # libzt is linked only by Sys B. No zts_* symbols are referenced in this phase.
-LIBS += -lzt
+LIBS += -lzt -lnx
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 
@@ -40,6 +40,8 @@ export LD := $(CXX)
 export OFILES := $(addsuffix .o,$(BINFILES)) $(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
 export INCLUDE := $(foreach dir,$(INCLUDES),-I$(dir)) $(foreach dir,$(LIBDIRS),-I$(dir)/include) $(foreach dir,$(AMS_LIBDIRS),-I$(dir)/include) -I$(CURDIR)/$(BUILD)
 export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib) $(foreach dir,$(AMS_LIBDIRS),-L$(dir)/lib) $(foreach dir,$(AMS_LIBDIRS),-L$(dir)/$(ATMOSPHERE_LIBRARY_DIR))
+# Export an explicit libzt search path as well; the recursive make must retain it.
+export LIBPATHS += -L$(LIBZT_DIR)/lib
 export BUILD_EXEFS_SRC := $(TOPDIR)/$(EXEFS_SRC)
 export APP_JSON := $(TOPDIR)/res/app.json
 
