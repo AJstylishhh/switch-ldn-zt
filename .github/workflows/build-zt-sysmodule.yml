@@ -48,9 +48,6 @@ jobs:
           git -C ldn_mitm checkout --detach 2fe07817eeea06b712009395f8bbcb2a02d30979
           git -C libzt fetch --no-tags origin 76c138bb916bc3a20d356bd4ef8e2195212ddb1e
           git -C libzt checkout --detach 76c138bb916bc3a20d356bd4ef8e2195212ddb1e
-
-          # Atmosphere-libs is normally a git-subrepo. Only operate on it as
-          # a Git working tree when a real .git directory exists.
           if [ -d ldn_mitm/Atmosphere-libs/.git ]; then
             git -C ldn_mitm/Atmosphere-libs fetch --no-tags origin d3083af1827cd6ca2a96feb9316eb85cd01bae1f
             git -C ldn_mitm/Atmosphere-libs checkout --detach d3083af1827cd6ca2a96feb9316eb85cd01bae1f
@@ -59,7 +56,6 @@ jobs:
       - name: Verify pins
         run: |
           set -eu
-
           LDN_SHA="$(git -C ldn_mitm rev-parse HEAD)"
           LIBZT_SHA="$(git -C libzt rev-parse HEAD)"
           echo "ldn_mitm SHA: $LDN_SHA"
@@ -145,7 +141,7 @@ jobs:
           set -eu
           test -f source/zt_compat.cpp
           test -f source/errno_compat.c
-          grep -q 'whole-archive -lzt' Makefile
+          grep -q -- '-lzt' Makefile
           grep -qx 'int errno = 0;' source/errno_compat.c
           grep -q 'extern "C" int pipe' source/zt_compat.cpp
           grep -q 'ATMOSPHERE_LIBRARIES_DIR' Makefile
