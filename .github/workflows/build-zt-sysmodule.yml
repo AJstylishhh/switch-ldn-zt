@@ -44,15 +44,13 @@ jobs:
       - name: Fetch and checkout pinned sources
         run: |
           set -eu
-
           git -C ldn_mitm fetch --no-tags origin 2fe07817eeea06b712009395f8bbcb2a02d30979
           git -C ldn_mitm checkout --detach 2fe07817eeea06b712009395f8bbcb2a02d30979
-
           git -C libzt fetch --no-tags origin 76c138bb916bc3a20d356bd4ef8e2195212ddb1e
           git -C libzt checkout --detach 76c138bb916bc3a20d356bd4ef8e2195212ddb1e
 
-          # Atmosphere-libs is a git-subrepo, not a nested Git working tree.
-          # Its pinned revision is recorded in .gitrepo and is validated below.
+          # Atmosphere-libs is normally a git-subrepo. Only operate on it as
+          # a Git working tree when a real .git directory exists.
           if [ -d ldn_mitm/Atmosphere-libs/.git ]; then
             git -C ldn_mitm/Atmosphere-libs fetch --no-tags origin d3083af1827cd6ca2a96feb9316eb85cd01bae1f
             git -C ldn_mitm/Atmosphere-libs checkout --detach d3083af1827cd6ca2a96feb9316eb85cd01bae1f
@@ -66,7 +64,6 @@ jobs:
           LIBZT_SHA="$(git -C libzt rev-parse HEAD)"
           echo "ldn_mitm SHA: $LDN_SHA"
           echo "libzt SHA:     $LIBZT_SHA"
-
           test "$LDN_SHA" = "2fe07817eeea06b712009395f8bbcb2a02d30979"
           test "$LIBZT_SHA" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
 
@@ -87,7 +84,8 @@ jobs:
           test -f ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk
           test -f ldn_mitm/Atmosphere-libs/libstratosphere/Makefile
           test -f zt_sysmodule/Makefile
-          grep -q '../ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk' zt_sysmodule/Makefile
+          grep -q 'ATMOSPHERE_LIBRARIES_DIR' zt_sysmodule/Makefile
+          grep -q 'include .*ATMOSPHERE_LIBRARIES_DIR.*config/templates/stratosphere.mk' zt_sysmodule/Makefile
           ! grep -q 'zt_sysmodule/ldn_mitm/Atmosphere-libs' zt_sysmodule/Makefile
 
       - name: Restore Atmosphere libstratosphere cache
@@ -150,7 +148,8 @@ jobs:
           grep -q 'whole-archive -lzt' Makefile
           grep -qx 'int errno = 0;' source/errno_compat.c
           grep -q 'extern "C" int pipe' source/zt_compat.cpp
-          grep -q '../ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk' Makefile
+          grep -q 'ATMOSPHERE_LIBRARIES_DIR' Makefile
+          grep -q 'include .*ATMOSPHERE_LIBRARIES_DIR.*config/templates/stratosphere.mk' Makefile
           ! grep -q 'zt_sysmodule/ldn_mitm/Atmosphere-libs' Makefile
           make clean || true
           make -j2
