@@ -1,26 +1,27 @@
 # Minimal Atmosphere sysmodule for isolating libzt from ldn_mitm.
 # Sys B: title 4200000000000011.
 
-ATMOSPHERE_LIBRARIES_DIR := $(abspath $(CURDIR)/../ldn_mitm/Atmosphere-libs)
+MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+ATMOSPHERE_LIBRARIES_DIR := $(abspath $(MAKEFILE_DIR)/../ldn_mitm/Atmosphere-libs)
 include $(ATMOSPHERE_LIBRARIES_DIR)/config/templates/stratosphere.mk
 
 TARGET := zerotier_sys
 BUILD := build
 SOURCES := source
 DATA :=
-INCLUDES := $(CURDIR)/../third_party/libzt/include
+INCLUDES := $(MAKEFILE_DIR)/../third_party/libzt/include
 
 TARGET_VERSION := 0.1.0-b1
 CFLAGS += -DZT_SYS_B1
 CXXFLAGS += -DZT_SYS_B1
-LIBDIRS += $(abspath $(CURDIR)/../third_party/libzt)
+LIBDIRS += $(abspath $(MAKEFILE_DIR)/../third_party/libzt)
 LIBS += -Wl,--whole-archive -lzt -Wl,--no-whole-archive
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 
 export OUTPUT := $(CURDIR)/$(TARGET)
-export TOPDIR := $(CURDIR)
-export VPATH := $(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) $(foreach dir,$(DATA),$(CURDIR)/$(dir))
+export TOPDIR := $(MAKEFILE_DIR)
+export VPATH := $(foreach dir,$(SOURCES),$(MAKEFILE_DIR)/$(dir)) $(foreach dir,$(DATA),$(MAKEFILE_DIR)/$(dir))
 export DEPSDIR := $(CURDIR)/$(BUILD)
 
 CFILES := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
@@ -45,7 +46,7 @@ all: $(BUILD)
 
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
-	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(MAKEFILE_DIR)/Makefile
 
 clean:
 	@rm -fr $(BUILD) $(TARGET).kip $(TARGET).elf $(TARGET).nso $(TARGET).npdm $(TARGET).nsp
