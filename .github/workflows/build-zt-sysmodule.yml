@@ -1,0 +1,105 @@
+name: Build ZeroTier Sysmodule B1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'zt_sysmodule/**'
+      - 'libzt'
+      - 'cmake/switch.toolchain.cmake'
+      - 'ldn_mitm'
+      - 'scripts/errno_compat.c'
+      - '.github/workflows/build-zt-sysmodule.yml'
+  pull_request:
+    paths:
+      - 'zt_sysmodule/**'
+      - 'libzt'
+      - 'cmake/switch.toolchain.cmake'
+      - 'ldn_mitm'
+      - 'scripts/errno_compat.c'
+      - '.github/workflows/build-zt-sysmodule.yml'
+  workflow_dispatch:
+
+jobs:
+  build-zt-sysmodule-b1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container: devkitpro/devkita64:latest
+
+    steps:
+      - name: Checkout pinned sources
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Verify pins
+        run: |
+          set -eu
+          test "$(git -C ldn_mitm rev-parse HEAD)" = "2fe07817eeea06b712009395f8bbcb2a02d30979"
+          test "$(git -C libzt rev-parse HEAD)" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
+          test "$(sed -n 's/^[[:space:]]*commit = //p' ldn_mitm/Atmosphere-libs/.gitrepo)" = "d3083af1827cd6ca2a96feb9316eb85cd01bae1f"
+
+      - name: Build Atmosphere libstratosphere
+        working-directory: ldn_mitm/Atmosphere-libs
+        run: |
+          set -eu
+          make -C libstratosphere nx_release
+          test -s libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
+
+      - name: Build Switch libzt 76c138b
+        working-directory: libzt
+        run: |
+          set -eu
+          export DEVKITA64=/opt/devkitpro/devkitA64
+          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
+          cmake -S . -B build-switch \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/switch.toolchain.cmake" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_STATIC_LIB=ON \
+            -DBUILD_SHARED_LIB=OFF \
+            -DBUILD_HOST_EXAMPLES=OFF \
+            -DBUILD_HOST_SELFTEST=OFF \
+            -DALLOW_INSTALL_TARGET=OFF \
+            -DZTS_DISABLE_CENTRAL_API=ON \
+            -DSWITCH=ON \
+            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_ERRNO_STDINCLUDE=1 -DLWIP_PROVIDE_ERRNO=0 -I$GITHUB_WORKSPACE/libzt/ext -I$GITHUB_WORKSPACE/libzt/ext/lwip-contrib/ports/unix/port/include" \
+            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_ERRNO_STDINCLUDE=1 -DLWIP_PROVIDE_ERRNO=0 -I$GITHUB_WORKSPACE/libzt/ext -I$GITHUB_WORKSPACE/libzt/ext/lwip-contrib/ports/unix/port/include"
+          cmake --build build-switch --target zt-static --parallel 2
+          mkdir -p "$GITHUB_WORKSPACE/third_party/libzt/include" "$GITHUB_WORKSPACE/third_party/libzt/lib"
+          cp include/ZeroTierSockets.h "$GITHUB_WORKSPACE/third_party/libzt/include/"
+          cp "$(find build-switch -type f -name 'libzt.a' | head -1)" "$GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a"
+          test -s "$GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a"
+
+      - name: Build Sys B B1
+        working-directory: zt_sysmodule
+        run: |
+          set -eu
+          test -f source/zt_compat.cpp
+          test -f source/errno_compat.c
+          grep -q 'whole-archive -lzt' Makefile
+          grep -qx 'int errno = 0;' source/errno_compat.c
+          make clean || true
+          make -j2
+          test -s zerotier_sys.nsp
+
+      - name: Package Sys B
+        run: |
+          set -eu
+          rm -rf dist
+          mkdir -p dist/atmosphere/contents/4200000000000011/flags
+          cp zt_sysmodule/zerotier_sys.nsp dist/atmosphere/contents/4200000000000011/exefs.nsp
+          cp zt_sysmodule/res/toolbox.json dist/atmosphere/contents/4200000000000011/toolbox.json
+          touch dist/atmosphere/contents/4200000000000011/flags/boot2.flag
+          test -s dist/atmosphere/contents/4200000000000011/exefs.nsp
+          test -s dist/atmosphere/contents/4200000000000011/toolbox.json
+          test -f dist/atmosphere/contents/4200000000000011/flags/boot2.flag
+          cd dist
+          zip -r ../zerotier-sysmodule-b1.zip atmosphere
+
+      - name: Upload Sys B artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zerotier-sysmodule-b1
+          path: zerotier-sysmodule-b1.zip
+          retention-days: 14
