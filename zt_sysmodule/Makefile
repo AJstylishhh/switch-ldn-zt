@@ -1,9 +1,9 @@
-# Minimal Atmosphere sysmodule for isolating libzt from ldn_mitm.
-# Sys B: title 4200000000000011.
-# Phase 1: pure AMS skeleton. ZeroTier sources and -lzt are intentionally excluded.
+# ZeroTier sysmodule (Sys B), title 4200000000000011.
+# Phase 1: link libzt only; no zts_* calls yet.
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 ATMOSPHERE_LIBRARIES_DIR := $(abspath $(MAKEFILE_DIR)/../ldn_mitm/Atmosphere-libs)
+LIBZT_DIR := $(abspath $(MAKEFILE_DIR)/../third_party/libzt)
 include $(ATMOSPHERE_LIBRARIES_DIR)/config/templates/stratosphere.mk
 
 TARGET := zerotier_sys
@@ -11,14 +11,16 @@ BUILD := build
 SOURCES := source
 DATA :=
 
-# Match the Atmosphere sysmodule build environment: expose libnx through
-# the standard PORTLIBS/LIBNX variables and explicitly include libnx headers.
-LIBDIRS += $(PORTLIBS) $(LIBNX)
+# Atmosphere/libnx environment plus the isolated Sys B libzt dependency.
+LIBDIRS += $(PORTLIBS) $(LIBNX) $(LIBZT_DIR)
 INCLUDES += $(DEVKITPRO)/libnx/include
 
 TARGET_VERSION := 0.1.0-b1
 CFLAGS += -DZT_SYS_B1
 CXXFLAGS += -DZT_SYS_B1
+
+# libzt is linked only by Sys B. No zts_* symbols are referenced in this phase.
+LIBS += -lzt
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 
@@ -27,10 +29,9 @@ export TOPDIR := $(MAKEFILE_DIR)
 export VPATH := $(foreach dir,$(SOURCES),$(MAKEFILE_DIR)/$(dir)) $(foreach dir,$(DATA),$(MAKEFILE_DIR)/$(dir))
 export DEPSDIR := $(CURDIR)/$(BUILD)
 
-# Phase 1 intentionally compiles only main.cpp.
-# zt_compat.cpp and errno_compat.c return in later isolation phases.
-CFILES :=
-CPPFILES := main.cpp
+# Phase 1: libzt link plus only the compatibility shims required by libzt.
+CFILES := errno_compat.c
+CPPFILES := main.cpp zt_compat.cpp
 SFILES :=
 BINFILES :=
 
