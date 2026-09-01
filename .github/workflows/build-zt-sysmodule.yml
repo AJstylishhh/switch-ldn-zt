@@ -48,10 +48,6 @@ jobs:
           git -C ldn_mitm checkout --detach 2fe07817eeea06b712009395f8bbcb2a02d30979
           git -C libzt fetch --no-tags origin 76c138bb916bc3a20d356bd4ef8e2195212ddb1e
           git -C libzt checkout --detach 76c138bb916bc3a20d356bd4ef8e2195212ddb1e
-          if [ -d ldn_mitm/Atmosphere-libs/.git ]; then
-            git -C ldn_mitm/Atmosphere-libs fetch --no-tags origin d3083af1827cd6ca2a96feb9316eb85cd01bae1f
-            git -C ldn_mitm/Atmosphere-libs checkout --detach d3083af1827cd6ca2a96feb9316eb85cd01bae1f
-          fi
 
       - name: Verify pins
         run: |
@@ -64,19 +60,10 @@ jobs:
           test "$LIBZT_SHA" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
 
           ATMOSPHERE_PIN="d3083af1827cd6ca2a96feb9316eb85cd01bae1f"
-          if [ -f ldn_mitm/Atmosphere-libs/.gitrepo ]; then
-            ATMOSPHERE_SHA="$(sed -n 's/^[[:space:]]*commit = //p' ldn_mitm/Atmosphere-libs/.gitrepo)"
-            echo "Atmosphere-libs .gitrepo SHA: $ATMOSPHERE_SHA"
-            test "$ATMOSPHERE_SHA" = "$ATMOSPHERE_PIN"
-          elif [ -d ldn_mitm/Atmosphere-libs/.git ]; then
-            ATMOSPHERE_SHA="$(git -C ldn_mitm/Atmosphere-libs rev-parse HEAD)"
-            echo "Atmosphere-libs Git SHA: $ATMOSPHERE_SHA"
-            test "$ATMOSPHERE_SHA" = "$ATMOSPHERE_PIN"
-          else
-            echo "Atmosphere-libs is neither a git-subrepo nor a Git working tree; expected pinned SHA $ATMOSPHERE_PIN"
-            exit 1
-          fi
-
+          test -f ldn_mitm/Atmosphere-libs/.gitrepo
+          ATMOSPHERE_SHA="$(sed -n 's/^[[:space:]]*commit = //p' ldn_mitm/Atmosphere-libs/.gitrepo)"
+          echo "Atmosphere-libs .gitrepo SHA: $ATMOSPHERE_SHA"
+          test "$ATMOSPHERE_SHA" = "$ATMOSPHERE_PIN"
           test -f ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk
           test -f ldn_mitm/Atmosphere-libs/libstratosphere/Makefile
           test -f zt_sysmodule/Makefile
@@ -111,31 +98,7 @@ jobs:
           key: atmosphere-libstratosphere-d3083af-devkita64
           path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
 
-      - name: Build Switch libzt 76c138b
-        working-directory: libzt
-        run: |
-          set -eu
-          export DEVKITA64=/opt/devkitpro/devkitA64
-          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
-          cmake -S . -B build-switch \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/switch.toolchain.cmake" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_STATIC_LIB=ON \
-            -DBUILD_SHARED_LIB=OFF \
-            -DBUILD_HOST_EXAMPLES=OFF \
-            -DBUILD_HOST_SELFTEST=OFF \
-            -DALLOW_INSTALL_TARGET=OFF \
-            -DZTS_DISABLE_CENTRAL_API=ON \
-            -DSWITCH=ON \
-            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_ERRNO_STDINCLUDE=1 -DLWIP_PROVIDE_ERRNO=0 -I$GITHUB_WORKSPACE/libzt/ext -I$GITHUB_WORKSPACE/libzt/ext/lwip-contrib/ports/unix/port/include" \
-            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_ERRNO_STDINCLUDE=1 -DLWIP_PROVIDE_ERRNO=0 -I$GITHUB_WORKSPACE/libzt/ext -I$GITHUB_WORKSPACE/libzt/ext/lwip-contrib/ports/unix/port/include"
-          cmake --build build-switch --target zt-static --parallel 2
-          mkdir -p "$GITHUB_WORKSPACE/third_party/libzt/include" "$GITHUB_WORKSPACE/third_party/libzt/lib"
-          cp include/ZeroTierSockets.h "$GITHUB_WORKSPACE/third_party/libzt/include/"
-          cp "$(find build-switch -type f -name 'libzt.a' | head -1)" "$GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a"
-          test -s "$GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a"
-
-      - name: Build Sys B B1 control (NO libzt link)
+      - name: Build Sys B B1 skeleton (ZERO libzt)
         working-directory: zt_sysmodule
         run: |
           set -eu
@@ -143,11 +106,13 @@ jobs:
           grep -q 'ZT_SYS_B1' Makefile
           ! grep -q -- '-lzt' Makefile
           ! grep -q -- 'LIBDIRS.*libzt' Makefile
+          ! grep -q 'zt_compat.cpp' Makefile
+          ! grep -q 'errno_compat.c' Makefile
           make clean || true
           make -j2
           test -s zerotier_sys.nsp
 
-      - name: Package Sys B
+      - name: Package Sys B skeleton
         run: |
           set -eu
           rm -rf dist
@@ -159,11 +124,11 @@ jobs:
           test -s dist/atmosphere/contents/4200000000000011/toolbox.json
           test -f dist/atmosphere/contents/4200000000000011/flags/boot2.flag
           cd dist
-          zip -r ../zerotier-sysmodule-b1.zip atmosphere
+          zip -r ../zerotier-sysmodule-b1-skeleton.zip atmosphere
 
-      - name: Upload Sys B artifact
+      - name: Upload Sys B skeleton artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zerotier-sysmodule-b1
-          path: zerotier-sysmodule-b1.zip
+          name: zerotier-sysmodule-b1-skeleton
+          path: zerotier-sysmodule-b1-skeleton.zip
           retention-days: 14
