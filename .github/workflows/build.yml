@@ -92,36 +92,40 @@ jobs:
         run: |
           set -eu
           cmake --build build-switch --target zt-static --parallel 2 --verbose
-          LIB="$(find build-switch -type f -name 'libzt.a' | head -1)"
+          LIB="$(find build-switch -type f -name 'libzt.a' -print -quit)"
           test -n "$LIB"
           test -s "$LIB"
+          echo "Built libzt archive: $LIB"
 
       - name: Prepare isolated Sys B libzt dependency
         run: |
           set -eu
-          rm -rf third_party/libzt
-          mkdir -p third_party/libzt/include third_party/libzt/lib
-          LIB="$(find libzt/build-switch -type f -name 'libzt.a' | head -1)"
+          mkdir -p third_party/libzt/lib third_party/libzt/include
+          LIB="$(find libzt/build-switch third_party -type f -name 'libzt.a' -print -quit)"
           test -n "$LIB"
           test -s "$LIB"
           cp libzt/include/ZeroTierSockets.h third_party/libzt/include/
           cp "$LIB" third_party/libzt/lib/libzt.a
           test -s third_party/libzt/lib/libzt.a
           echo "Sys B libzt archive: $GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a"
-          ls -lh third_party/libzt/lib/libzt.a
+          find third_party -type f -name 'libzt.a' -ls
 
       - name: Verify Sys B libzt dependency before link
         run: |
           set -eu
+          find third_party -type f -name 'libzt.a' -print
           test -s third_party/libzt/lib/libzt.a
           test -f third_party/libzt/include/ZeroTierSockets.h
 
       - name: Build Sys B Phase 1
         run: |
           set -eu
-          test -s "$GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a"
+          test -s third_party/libzt/lib/libzt.a
           echo "Expected libzt linker flags: -L$GITHUB_WORKSPACE/third_party/libzt/lib -lzt"
           make -C zt_sysmodule clean
+          make -C zt_sysmodule V=1 -n 2>&1 | tee zt_sysmodule-dry-run.log
+          grep -F -- "-L$GITHUB_WORKSPACE/third_party/libzt/lib" zt_sysmodule-dry-run.log
+          grep -F -- "-lzt" zt_sysmodule-dry-run.log
           make -C zt_sysmodule V=1 -j4 2>&1 | tee zt_sysmodule-build.log
           grep -F -- "-L$GITHUB_WORKSPACE/third_party/libzt/lib" zt_sysmodule-build.log
           grep -F -- "-lzt" zt_sysmodule-build.log
