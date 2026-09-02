@@ -101,22 +101,30 @@ jobs:
           set -eu
           rm -rf third_party/libzt
           mkdir -p third_party/libzt/include third_party/libzt/lib
+          LIB="$(find libzt/build-switch -type f -name 'libzt.a' | head -1)"
+          test -n "$LIB"
+          test -s "$LIB"
           cp libzt/include/ZeroTierSockets.h third_party/libzt/include/
-          cp "$(find libzt/build-switch -type f -name 'libzt.a' | head -1)" third_party/libzt/lib/libzt.a
+          cp "$LIB" third_party/libzt/lib/libzt.a
           test -s third_party/libzt/lib/libzt.a
+          echo "Sys B libzt archive: $GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a"
+          ls -lh third_party/libzt/lib/libzt.a
 
       - name: Verify Sys B libzt dependency before link
         run: |
           set -eu
           test -s third_party/libzt/lib/libzt.a
           test -f third_party/libzt/include/ZeroTierSockets.h
-          ls -lh third_party/libzt/lib/libzt.a
 
       - name: Build Sys B Phase 1
         run: |
           set -eu
+          test -s "$GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a"
+          echo "Expected libzt linker flags: -L$GITHUB_WORKSPACE/third_party/libzt/lib -lzt"
           make -C zt_sysmodule clean
-          make -C zt_sysmodule -j4
+          make -C zt_sysmodule V=1 -j4 2>&1 | tee zt_sysmodule-build.log
+          grep -F -- "-L$GITHUB_WORKSPACE/third_party/libzt/lib" zt_sysmodule-build.log
+          grep -F -- "-lzt" zt_sysmodule-build.log
           test -s zt_sysmodule/zerotier_sys.elf
           test -s zt_sysmodule/zerotier_sys.nsp
 
@@ -135,7 +143,7 @@ jobs:
           test -s dist/atmosphere/contents/4200000000000011/exefs.nsp
           test -f dist/atmosphere/contents/4200000000000011/flags/boot2.flag
 
-      - name: Package Sys B artifact
+      - name: Package Sys B Phase 1
         run: |
           set -eu
           tar -C dist -czf zerotier-sysmodule-phase1.tar.gz atmosphere
