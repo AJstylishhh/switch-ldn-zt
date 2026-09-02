@@ -1,5 +1,6 @@
 # ZeroTier sysmodule (Sys B), title 4200000000000011.
-# Phase 2: link libzt + zts_init_from_storage only (no node_start/join).
+# Phase 1 (hardware OK): link libzt only; no zts_* calls.
+# Phase 2 failed on device with logo 0xffe when zts_init_from_storage was referenced.
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 ATMOSPHERE_LIBRARIES_DIR := $(abspath $(MAKEFILE_DIR)/../ldn_mitm/Atmosphere-libs)
@@ -15,9 +16,9 @@ DATA :=
 LIBDIRS += $(PORTLIBS) $(LIBNX) $(ZTLIBDIR)
 INCLUDES += $(DEVKITPRO)/libnx/include
 
-TARGET_VERSION := 0.2.0-b2
-CFLAGS += -DZT_SYS_B2
-CXXFLAGS += -DZT_SYS_B2
+TARGET_VERSION := 0.1.1-b1
+CFLAGS += -DZT_SYS_B1
+CXXFLAGS += -DZT_SYS_B1
 LIBS += $(ZTA) -lnx
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))

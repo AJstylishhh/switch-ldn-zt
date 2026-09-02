@@ -1,26 +1,16 @@
-# Sys B boot test notes
+# Sys B hardware results
 
-Title ID: `4200000000000011`
+Title: `4200000000000011`
 
-## Phase 1 (passed on hardware)
-- libzt linked, **no** `zts_*` calls
-- Logo boot OK with LDN #40 at `4200000000000010`
-- ZeroTier Central offline (expected)
+| Phase | What | Result |
+|-------|------|--------|
+| Skeleton (no libzt) | AMS hooks only | Boot OK |
+| Phase 1 | libzt linked, **no** `zts_*` | Boot OK |
+| Phase 2 | `zts_init_from_storage` | **Logo 0xffe** |
 
-## Phase 2 (current)
-- Calls **only** `zts_init_from_storage("sdmc:/config/switch-ldn-zt")` from `Main()`
-- No `zts_node_start`, no join, no wait loops
-- Failure of init must not abort the sysmodule
-- Central may still be offline (node not started)
+Conclusion: linking `libzt.a` is fine; **any real `zts_*` reference** pulls objects that abort at sysmodule load (same class of failure as full ZT inside ldn_mitm).
 
-### Install
-```
-atmosphere/contents/4200000000000011/exefs.nsp
-atmosphere/contents/4200000000000011/flags/boot2.flag
-atmosphere/contents/4200000000000011/toolbox.json
-```
+NRO ZeroTier still works but does not stay up in-game.
 
-Optional: create empty folder `sdmc:/config/switch-ldn-zt/` on the SD.
-
-### Recover if logo crash
-Remove or rename `atmosphere/contents/4200000000000011/` (or only `flags/boot2.flag`) via SD/Hekate.
+## Recover from bad build
+Delete or rename `atmosphere/contents/4200000000000011/` (or only `flags/boot2.flag`).

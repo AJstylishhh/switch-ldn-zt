@@ -118,10 +118,6 @@ jobs:
       - name: Stage libzt archive for Sys B
         run: |
           set -eu
-          echo "=== locate libzt.a ==="
-          find third_party -name 'libzt.a' -ls || true
-          find libzt/build-switch -name 'libzt.a' -ls || true
-
           mkdir -p third_party/libzt/lib third_party/libzt/include
 
           if [ ! -s third_party/libzt/lib/libzt.a ]; then
@@ -136,19 +132,12 @@ jobs:
           test -s third_party/libzt/lib/libzt.a
           cp -f libzt/include/ZeroTierSockets.h third_party/libzt/include/ZeroTierSockets.h
           ls -la third_party/libzt/lib/libzt.a
-          file third_party/libzt/lib/libzt.a || true
 
-      - name: Build Sys B Phase 2
+      - name: Build Sys B Phase 1 (no zts_*)
         run: |
           set -eu
           test -s third_party/libzt/lib/libzt.a
-          test -f third_party/libzt/include/ZeroTierSockets.h
-          echo "=== Sys B dry-run link flags ==="
-          make -C zt_sysmodule V=1 -n 2>&1 | tee zt_sysmodule-dry-run.log
-          grep -F -- "$GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a" zt_sysmodule-dry-run.log
-          echo "=== Sys B build ==="
-          make -C zt_sysmodule V=1 -j4 2>&1 | tee zt_sysmodule-build.log
-          grep -F -- "$GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a" zt_sysmodule-build.log || true
+          make -C zt_sysmodule V=1 -j4
           test -s zt_sysmodule/zerotier_sys.elf
           test -s zt_sysmodule/zerotier_sys.nsp
 
@@ -158,26 +147,21 @@ jobs:
           cp zt_sysmodule/res/toolbox.json dist/atmosphere/contents/4200000000000011/toolbox.json
           : > dist/atmosphere/contents/4200000000000011/flags/boot2.flag
 
-      - name: Verify Sys B Phase 2 isolation
+      - name: Verify no zts_* in Sys B sources
         run: |
           set -eu
-          # Must call init_from_storage exactly once in main.cpp
-          grep -n 'zts_init_from_storage' zt_sysmodule/source/main.cpp
-          # Must NOT start node or join network yet
-          ! grep -R -n -E 'zts_node_start|zts_net_join|zts_node_join' zt_sysmodule/source
+          ! grep -R -n -E 'zts_' zt_sysmodule/source
           grep -F -- 'LIBS += $(ZTA) -lnx' zt_sysmodule/Makefile
-          grep -F -- 'ZTA := $(ZTLIBDIR)/lib/libzt.a' zt_sysmodule/Makefile
           test -s dist/atmosphere/contents/4200000000000011/exefs.nsp
-          test -f dist/atmosphere/contents/4200000000000011/flags/boot2.flag
 
-      - name: Package Sys B Phase 2
+      - name: Package Sys B Phase 1
         run: |
           set -eu
-          tar -C dist -czf zerotier-sysmodule-phase2.tar.gz atmosphere
+          tar -C dist -czf zerotier-sysmodule-phase1.tar.gz atmosphere
 
-      - name: Upload Sys B Phase 2 artifact
+      - name: Upload Sys B Phase 1 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zerotier-sysmodule-phase2
-          path: zerotier-sysmodule-phase2.tar.gz
+          name: zerotier-sysmodule-phase1
+          path: zerotier-sysmodule-phase1.tar.gz
           retention-days: 14
