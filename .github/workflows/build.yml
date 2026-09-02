@@ -17,13 +17,15 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Configure safe Git directories
+      - name: Configure safe Git directories and pin libzt
         run: |
           set -eu
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$GITHUB_WORKSPACE/ldn_mitm"
           git config --global --add safe.directory "$GITHUB_WORKSPACE/libzt"
           git config --global --add safe.directory "$GITHUB_WORKSPACE/ldn_mitm/Atmosphere-libs"
+          git -C libzt fetch --no-tags --depth=1 origin 76c138bb916bc3a20d356bd4ef8e2195212ddb1e
+          git -C libzt checkout --detach 76c138bb916bc3a20d356bd4ef8e2195212ddb1e
 
       - name: Verify pinned sources
         run: |
@@ -59,6 +61,13 @@ jobs:
           path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
           key: atmosphere-libstratosphere-d3083af-devkita64
 
+      - name: Restore libzt cache
+        id: libzt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: libzt/build-switch
+          key: libzt-switch-76c138bb916bc3a20d356bd4ef8e2195212ddb1e-devkita64
+
       - name: Verify devkitA64
         run: |
           set -eu
@@ -68,7 +77,8 @@ jobs:
           test -x "$DEVKITA64/bin/aarch64-none-elf-g++"
           test "$(aarch64-none-elf-gcc -dumpmachine)" = "aarch64-none-elf"
 
-      - name: Configure libzt
+      - name: Configure libzt on cache miss
+        if: steps.libzt-cache.outputs.cache-hit != 'true'
         working-directory: libzt
         run: |
           set -eu
@@ -87,7 +97,8 @@ jobs:
             -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port/include" \
             -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port/include"
 
-      - name: Build libzt static library
+      - name: Build libzt on cache miss
+        if: steps.libzt-cache.outputs.cache-hit != 'true'
         working-directory: libzt
         run: |
           set -eu
@@ -97,38 +108,47 @@ jobs:
           test -s "$LIB"
           echo "Built libzt archive: $LIB"
 
-      - name: Prepare isolated Sys B libzt dependency
-        run: |
-          set -eu
-          mkdir -p third_party/libzt/lib third_party/libzt/include
-          LIB="$(find libzt/build-switch third_party -type f -name 'libzt.a' -print -quit)"
-          test -n "$LIB"
-          test -s "$LIB"
-          cp libzt/include/ZeroTierSockets.h third_party/libzt/include/
-          cp "$LIB" third_party/libzt/lib/libzt.a
-          test -s third_party/libzt/lib/libzt.a
-          echo "Sys B libzt archive: $GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a"
-          find third_party -type f -name 'libzt.a' -ls
+      - name: Save libzt cache on miss
+        if: steps.libzt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: libzt/build-switch
+          key: libzt-switch-76c138bb916bc3a20d356bd4ef8e2195212ddb1e-devkita64
 
-      - name: Verify Sys B libzt dependency before link
+      - name: Stage libzt archive for Sys B
         run: |
           set -eu
-          find third_party -type f -name 'libzt.a' -print
+          echo "=== locate libzt.a ==="
+          find third_party -name 'libzt.a' -ls || true
+          find libzt/build-switch -name 'libzt.a' -ls || true
+
+          mkdir -p third_party/libzt/lib third_party/libzt/include
+
+          if [ ! -s third_party/libzt/lib/libzt.a ]; then
+            src="$(find libzt/build-switch third_party -name 'libzt.a' -print -quit || true)"
+            if [ -z "$src" ]; then
+              echo "FATAL: no libzt.a found after libzt build/restore"
+              exit 1
+            fi
+            cp -f "$src" third_party/libzt/lib/libzt.a
+          fi
+
           test -s third_party/libzt/lib/libzt.a
-          test -f third_party/libzt/include/ZeroTierSockets.h
+          cp -f libzt/include/ZeroTierSockets.h third_party/libzt/include/ZeroTierSockets.h
+          ls -la third_party/libzt/lib/libzt.a
+          file third_party/libzt/lib/libzt.a || true
 
       - name: Build Sys B Phase 1
         run: |
           set -eu
           test -s third_party/libzt/lib/libzt.a
-          echo "Expected libzt linker flags: -L$GITHUB_WORKSPACE/third_party/libzt/lib -lzt"
-          make -C zt_sysmodule clean
+          echo "=== Sys B dry-run link flags ==="
           make -C zt_sysmodule V=1 -n 2>&1 | tee zt_sysmodule-dry-run.log
-          grep -F -- "-L$GITHUB_WORKSPACE/third_party/libzt/lib" zt_sysmodule-dry-run.log
+          grep -F -- "$GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a" zt_sysmodule-dry-run.log
           grep -F -- "-lzt" zt_sysmodule-dry-run.log
+          echo "=== Sys B build ==="
           make -C zt_sysmodule V=1 -j4 2>&1 | tee zt_sysmodule-build.log
-          grep -F -- "-L$GITHUB_WORKSPACE/third_party/libzt/lib" zt_sysmodule-build.log
-          grep -F -- "-lzt" zt_sysmodule-build.log
+          grep -F -- "$GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a" zt_sysmodule-build.log
           test -s zt_sysmodule/zerotier_sys.elf
           test -s zt_sysmodule/zerotier_sys.nsp
 
@@ -142,8 +162,8 @@ jobs:
         run: |
           set -eu
           ! grep -R -n -E 'zts_init|zts_node_start|zts_net_join|zts_node_join|zts_' zt_sysmodule/source/main.cpp
-          grep -n -- 'LIBS += -lzt -lnx' zt_sysmodule/Makefile
-          grep -n 'third_party/libzt' zt_sysmodule/Makefile
+          grep -F -- 'LIBS += $(ZTA) -lnx' zt_sysmodule/Makefile
+          grep -F -- 'ZTA := $(ZTLIBDIR)/lib/libzt.a' zt_sysmodule/Makefile
           test -s dist/atmosphere/contents/4200000000000011/exefs.nsp
           test -f dist/atmosphere/contents/4200000000000011/flags/boot2.flag
 
