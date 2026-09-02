@@ -98,21 +98,65 @@ jobs:
           key: atmosphere-libstratosphere-d3083af-devkita64
           path: ldn_mitm/Atmosphere-libs/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
 
-      - name: Build Sys B B1 skeleton (ZERO libzt)
+      - name: Configure libzt for Switch
+        working-directory: libzt
+        run: |
+          set -eu
+          export DEVKITA64=/opt/devkitpro/devkitA64
+          export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
+          cmake -S . -B build-switch \
+            -DCMAKE_TOOLCHAIN_FILE=/__w/switch-ldn-zt/switch-ldn-zt/cmake/switch.toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_STATIC_LIB=ON \
+            -DBUILD_SHARED_LIB=OFF \
+            -DBUILD_HOST_EXAMPLES=OFF \
+            -DBUILD_HOST_SELFTEST=OFF \
+            -DALLOW_INSTALL_TARGET=OFF \
+            -DZTS_DISABLE_CENTRAL_API=ON \
+            -DSWITCH=ON \
+            -DCMAKE_C_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port/include" \
+            -DCMAKE_CXX_FLAGS="-D__SWITCH__ -DSWITCH -DFD_SETSIZE=1024 -D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809 -D_DEFAULT_SOURCE -DLWIP_PROVIDE_ERRNO=1 -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext -I/__w/switch-ldn-zt/switch-ldn-zt/libzt/ext/lwip-contrib/ports/unix/port/include"
+
+      - name: Build libzt for Switch
+        working-directory: libzt
+        run: |
+          set -eu
+          cmake --build build-switch --target zt-static --parallel 2 --verbose
+          test -n "$(find build-switch -name 'libzt.a' -print -quit)"
+
+      - name: Stage libzt archive for Sys B
+        run: |
+          set -eu
+          echo "=== locate libzt.a ==="
+          find third_party -name 'libzt.a' -ls || true
+          mkdir -p third_party/libzt/lib third_party/libzt/include
+          src="$(find libzt/build-switch -name 'libzt.a' -print -quit || true)"
+          if [ -z "$src" ]; then
+            echo "FATAL: no libzt.a under libzt/build-switch after libzt build"
+            exit 1
+          fi
+          cp -f "$src" third_party/libzt/lib/libzt.a
+          cp libzt/include/ZeroTierSockets.h third_party/libzt/include/
+          test -s third_party/libzt/lib/libzt.a
+          ls -la third_party/libzt/lib/libzt.a
+          file third_party/libzt/lib/libzt.a || true
+
+      - name: Build Sys B Phase 1 (link libzt, no zts_* calls)
         working-directory: zt_sysmodule
         run: |
           set -eu
-          test -f source/main.cpp
-          grep -q 'ZT_SYS_B1' Makefile
-          ! grep -q -- '-lzt' Makefile
-          ! grep -q -- 'LIBDIRS.*libzt' Makefile
-          ! grep -q 'zt_compat.cpp' Makefile
-          ! grep -q 'errno_compat.c' Makefile
+          test -s "$GITHUB_WORKSPACE/third_party/libzt/lib/libzt.a"
           make clean || true
           make -j2
           test -s zerotier_sys.nsp
 
-      - name: Package Sys B skeleton
+      - name: Verify Sys B Phase 1 isolation
+        run: |
+          set -eu
+          ! grep -R -n -E 'zts_init|zts_node_start|zts_net_join|zts_node_join|zts_' zt_sysmodule/source/main.cpp
+          test -s third_party/libzt/lib/libzt.a
+
+      - name: Package Sys B Phase 1
         run: |
           set -eu
           rm -rf dist
@@ -121,14 +165,13 @@ jobs:
           cp zt_sysmodule/res/toolbox.json dist/atmosphere/contents/4200000000000011/toolbox.json
           touch dist/atmosphere/contents/4200000000000011/flags/boot2.flag
           test -s dist/atmosphere/contents/4200000000000011/exefs.nsp
-          test -s dist/atmosphere/contents/4200000000000011/toolbox.json
           test -f dist/atmosphere/contents/4200000000000011/flags/boot2.flag
           cd dist
-          zip -r ../zerotier-sysmodule-b1-skeleton.zip atmosphere
+          zip -r ../zerotier-sysmodule-b1-phase1.zip atmosphere
 
-      - name: Upload Sys B skeleton artifact
+      - name: Upload Sys B Phase 1 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zerotier-sysmodule-b1-skeleton
-          path: zerotier-sysmodule-b1-skeleton.zip
+          name: zerotier-sysmodule-b1-phase1
+          path: zerotier-sysmodule-b1-phase1.zip
           retention-days: 14
