@@ -11,15 +11,12 @@ BUILD := build
 SOURCES := source
 DATA :=
 
-# Atmosphere/libnx environment plus the isolated Sys B libzt dependency.
 LIBDIRS += $(PORTLIBS) $(LIBNX) $(ZTLIBDIR)
 INCLUDES += $(DEVKITPRO)/libnx/include
 
 TARGET_VERSION := 0.1.0-b1
 CFLAGS += -DZT_SYS_B1
 CXXFLAGS += -DZT_SYS_B1
-
-# libzt is linked only by Sys B. No zts_* symbols are referenced in this phase.
 LIBS += -lzt -lnx
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
@@ -29,19 +26,19 @@ export TOPDIR := $(MAKEFILE_DIR)
 export VPATH := $(foreach dir,$(SOURCES),$(MAKEFILE_DIR)/$(dir)) $(foreach dir,$(DATA),$(MAKEFILE_DIR)/$(dir))
 export DEPSDIR := $(CURDIR)/$(BUILD)
 
-# Phase 1: libzt link plus only the compatibility shims required by libzt.
 CFILES := errno_compat.c
 CPPFILES := main.cpp zt_compat.cpp
 SFILES :=
 BINFILES :=
 
 export LD := $(CXX)
-
 export OFILES := $(addsuffix .o,$(BINFILES)) $(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
 export INCLUDE := $(foreach dir,$(INCLUDES),-I$(dir)) $(foreach dir,$(LIBDIRS),-I$(dir)/include) $(foreach dir,$(AMS_LIBDIRS),-I$(dir)/include) -I$(CURDIR)/$(BUILD)
 export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib) $(foreach dir,$(AMS_LIBDIRS),-L$(dir)/lib) $(foreach dir,$(AMS_LIBDIRS),-L$(dir)/$(ATMOSPHERE_LIBRARY_DIR))
-# Force the absolute libzt directory onto the final linker flags too.
-export LDFLAGS += -L$(ZTLIBDIR)/lib
+export LIBPATHS += -L$(ZTLIBDIR)/lib
+export LIBS := $(LIBS)
+export LDFLAGS := $(LDFLAGS) -L$(ZTLIBDIR)/lib
+export ZTLIBDIR := $(ZTLIBDIR)
 export BUILD_EXEFS_SRC := $(TOPDIR)/$(EXEFS_SRC)
 export APP_JSON := $(TOPDIR)/res/app.json
 
@@ -50,7 +47,7 @@ all: $(BUILD)
 
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
-	@$(MAKE) --no-print-directory -C $(BUILD) -f $(MAKEFILE_DIR)/Makefile V=$(V)
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(MAKEFILE_DIR)/Makefile V=$(V) LIBS="$(LIBS)" LIBPATHS="$(LIBPATHS)" LDFLAGS="$(LDFLAGS)"
 
 clean:
 	@rm -fr $(BUILD) $(TARGET).kip $(TARGET).elf $(TARGET).nso $(TARGET).npdm $(TARGET).nsp
