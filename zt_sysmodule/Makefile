@@ -3,7 +3,7 @@
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 ATMOSPHERE_LIBRARIES_DIR := $(abspath $(MAKEFILE_DIR)/../ldn_mitm/Atmosphere-libs)
-LIBZT_DIR := $(abspath $(MAKEFILE_DIR)/../third_party/libzt)
+ZTLIBDIR := $(abspath $(MAKEFILE_DIR)/../third_party/libzt)
 include $(ATMOSPHERE_LIBRARIES_DIR)/config/templates/stratosphere.mk
 
 TARGET := zerotier_sys
@@ -12,7 +12,7 @@ SOURCES := source
 DATA :=
 
 # Atmosphere/libnx environment plus the isolated Sys B libzt dependency.
-LIBDIRS += $(PORTLIBS) $(LIBNX) $(LIBZT_DIR)
+LIBDIRS += $(PORTLIBS) $(LIBNX) $(ZTLIBDIR)
 INCLUDES += $(DEVKITPRO)/libnx/include
 
 TARGET_VERSION := 0.1.0-b1
@@ -40,8 +40,8 @@ export LD := $(CXX)
 export OFILES := $(addsuffix .o,$(BINFILES)) $(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
 export INCLUDE := $(foreach dir,$(INCLUDES),-I$(dir)) $(foreach dir,$(LIBDIRS),-I$(dir)/include) $(foreach dir,$(AMS_LIBDIRS),-I$(dir)/include) -I$(CURDIR)/$(BUILD)
 export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib) $(foreach dir,$(AMS_LIBDIRS),-L$(dir)/lib) $(foreach dir,$(AMS_LIBDIRS),-L$(dir)/$(ATMOSPHERE_LIBRARY_DIR))
-# Export an explicit libzt search path as well; the recursive make must retain it.
-export LIBPATHS += -L$(LIBZT_DIR)/lib
+# Force the absolute libzt directory onto the final linker flags too.
+export LDFLAGS += -L$(ZTLIBDIR)/lib
 export BUILD_EXEFS_SRC := $(TOPDIR)/$(EXEFS_SRC)
 export APP_JSON := $(TOPDIR)/res/app.json
 
@@ -50,7 +50,7 @@ all: $(BUILD)
 
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
-	@$(MAKE) --no-print-directory -C $(BUILD) -f $(MAKEFILE_DIR)/Makefile
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(MAKEFILE_DIR)/Makefile V=$(V)
 
 clean:
 	@rm -fr $(BUILD) $(TARGET).kip $(TARGET).elf $(TARGET).nso $(TARGET).npdm $(TARGET).nsp
