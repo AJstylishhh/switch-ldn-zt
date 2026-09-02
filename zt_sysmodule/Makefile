@@ -4,6 +4,7 @@
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 ATMOSPHERE_LIBRARIES_DIR := $(abspath $(MAKEFILE_DIR)/../ldn_mitm/Atmosphere-libs)
 ZTLIBDIR := $(abspath $(MAKEFILE_DIR)/../third_party/libzt)
+ZTA := $(ZTLIBDIR)/lib/libzt.a
 include $(ATMOSPHERE_LIBRARIES_DIR)/config/templates/stratosphere.mk
 
 TARGET := zerotier_sys
@@ -17,7 +18,7 @@ INCLUDES += $(DEVKITPRO)/libnx/include
 TARGET_VERSION := 0.1.0-b1
 CFLAGS += -DZT_SYS_B1
 CXXFLAGS += -DZT_SYS_B1
-LIBS += -lzt -lnx
+LIBS += $(ZTA) -lnx
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 
@@ -35,10 +36,11 @@ export LD := $(CXX)
 export OFILES := $(addsuffix .o,$(BINFILES)) $(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
 export INCLUDE := $(foreach dir,$(INCLUDES),-I$(dir)) $(foreach dir,$(LIBDIRS),-I$(dir)/include) $(foreach dir,$(AMS_LIBDIRS),-I$(dir)/include) -I$(CURDIR)/$(BUILD)
 export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib) $(foreach dir,$(AMS_LIBDIRS),-L$(dir)/lib) $(foreach dir,$(AMS_LIBDIRS),-L$(dir)/$(ATMOSPHERE_LIBRARY_DIR))
-export LIBPATHS += -L$(ZTLIBDIR)/lib
-export LIBS := $(LIBS)
 export LDFLAGS := $(LDFLAGS) -L$(ZTLIBDIR)/lib
-export ZTLIBDIR := $(ZTLIBDIR)
+export LIBS := $(LIBS)
+export LIBPATHS := $(LIBPATHS)
+export LDFLAGS := $(LDFLAGS)
+export ZTA := $(ZTA)
 export BUILD_EXEFS_SRC := $(TOPDIR)/$(EXEFS_SRC)
 export APP_JSON := $(TOPDIR)/res/app.json
 
@@ -46,6 +48,7 @@ export APP_JSON := $(TOPDIR)/res/app.json
 all: $(BUILD)
 
 $(BUILD):
+	@test -s $(ZTA) || (echo "Missing $(ZTA) — run libzt build first"; exit 1)
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(MAKEFILE_DIR)/Makefile V=$(V) LIBS="$(LIBS)" LIBPATHS="$(LIBPATHS)" LDFLAGS="$(LDFLAGS)"
 
