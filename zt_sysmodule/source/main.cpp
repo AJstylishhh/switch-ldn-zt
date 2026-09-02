@@ -1,9 +1,9 @@
 /*
- * ZeroTier sysmodule (Sys B) skeleton.
+ * ZeroTier sysmodule (Sys B).
  *
- * Phase 1 intentionally contains no libzt and no zts_* calls. Its startup
- * shape mirrors the working DefenderOfHyrule/ldn_mitm sysmodule at
- * 2fe07817eeea06b712009395f8bbcb2a02d30979.
+ * Phase 2: link libzt and call ONLY zts_init_from_storage once from Main().
+ * No zts_node_start, no zts_net_join, no wait/spin loops.
+ * Startup shape still mirrors Defender ldn_mitm AMS hooks.
  */
 
 #include <stratosphere.hpp>
@@ -13,6 +13,7 @@
 #include <malloc.h>
 
 #include <switch.h>
+#include <ZeroTierSockets.h>
 
 namespace ams {
 
@@ -20,6 +21,9 @@ namespace ams {
 
         constexpr size_t MallocBufferSize = 1_MB;
         alignas(os::MemoryPageSize) constinit u8 g_malloc_buffer[MallocBufferSize];
+
+        /* Config/storage dir for libzt identity material on SD. */
+        constexpr const char *ZtStorageDir = "sdmc:/config/switch-ldn-zt";
 
     }
 
@@ -71,7 +75,7 @@ namespace ams {
             fs::SetAllocator(sysb::Allocate, sysb::Deallocate);
             fs::SetEnabledAutoAbort(false);
 
-            /* Mount the SD card. */
+            /* Mount the SD card before any ZT storage path is used. */
             R_ABORT_UNLESS(fs::MountSdCard("sdmc"));
         }
 
@@ -93,7 +97,15 @@ namespace ams {
 
     void Main()
     {
-        /* Pure skeleton: no LDN, no libzt, no zts_* calls. */
+        /*
+         * Phase 2 isolation:
+         * - Call zts_init_from_storage exactly once.
+         * - Do NOT call zts_node_start / zts_net_join / delay loops.
+         * - Never abort on ZT failure (sysmodule must stay up).
+         */
+        const int zt_rc = zts_init_from_storage(ZtStorageDir);
+        AMS_UNUSED(zt_rc);
+
         while (true)
         {
             os::SleepThread(TimeSpan::FromSeconds(1));

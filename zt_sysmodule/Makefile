@@ -1,5 +1,5 @@
 # ZeroTier sysmodule (Sys B), title 4200000000000011.
-# Phase 1: link libzt only; no zts_* calls yet.
+# Phase 2: link libzt + zts_init_from_storage only (no node_start/join).
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 ATMOSPHERE_LIBRARIES_DIR := $(abspath $(MAKEFILE_DIR)/../ldn_mitm/Atmosphere-libs)
@@ -15,9 +15,9 @@ DATA :=
 LIBDIRS += $(PORTLIBS) $(LIBNX) $(ZTLIBDIR)
 INCLUDES += $(DEVKITPRO)/libnx/include
 
-TARGET_VERSION := 0.1.0-b1
-CFLAGS += -DZT_SYS_B1
-CXXFLAGS += -DZT_SYS_B1
+TARGET_VERSION := 0.2.0-b2
+CFLAGS += -DZT_SYS_B2
+CXXFLAGS += -DZT_SYS_B2
 LIBS += $(ZTA) -lnx
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))

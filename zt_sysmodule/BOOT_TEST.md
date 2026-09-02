@@ -1,17 +1,26 @@
-# Sys B boot test
+# Sys B boot test notes
 
-Phase 1 is a pure Atmosphere sysmodule skeleton. It intentionally links no libzt and compiles no ZeroTier compatibility sources.
+Title ID: `4200000000000011`
 
-Install the CI skeleton artifact and boot Atmosphere. The goal is a clean logo boot with no Sys B crash.
+## Phase 1 (passed on hardware)
+- libzt linked, **no** `zts_*` calls
+- Logo boot OK with LDN #40 at `4200000000000010`
+- ZeroTier Central offline (expected)
 
-## Emergency disable
+## Phase 2 (current)
+- Calls **only** `zts_init_from_storage("sdmc:/config/switch-ldn-zt")` from `Main()`
+- No `zts_node_start`, no join, no wait loops
+- Failure of init must not abort the sysmodule
+- Central may still be offline (node not started)
 
-Sys B is auto-loaded by:
+### Install
+```
+atmosphere/contents/4200000000000011/exefs.nsp
+atmosphere/contents/4200000000000011/flags/boot2.flag
+atmosphere/contents/4200000000000011/toolbox.json
+```
 
-`atmosphere/contents/4200000000000011/flags/boot2.flag`
+Optional: create empty folder `sdmc:/config/switch-ldn-zt/` on the SD.
 
-To stop Sys B from auto-loading, remove this file from the SD card:
-
-`atmosphere/contents/4200000000000011/flags/boot2.flag`
-
-Do not proceed to the next isolation phase until the skeleton boot test is successful.
+### Recover if logo crash
+Remove or rename `atmosphere/contents/4200000000000011/` (or only `flags/boot2.flag`) via SD/Hekate.
