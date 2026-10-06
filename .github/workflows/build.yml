@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# libzt-nx tip of switch after "Fit libzt into a Switch system module"
+env:
+  LIBZT_SHA: 1aa9adab82a79f795af149ae2044e33a9c046aa5
+
 jobs:
   build-libzt-switch:
     runs-on: ubuntu-latest
@@ -17,21 +21,23 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Configure safe Git directories and pin libzt
+      - name: Configure safe Git directories and pin libzt-nx (sysmodule profile)
         run: |
           set -eu
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$GITHUB_WORKSPACE/ldn_mitm"
           git config --global --add safe.directory "$GITHUB_WORKSPACE/libzt"
           git config --global --add safe.directory "$GITHUB_WORKSPACE/ldn_mitm/Atmosphere-libs"
-          git -C libzt fetch --no-tags --depth=1 origin 76c138bb916bc3a20d356bd4ef8e2195212ddb1e
-          git -C libzt checkout --detach 76c138bb916bc3a20d356bd4ef8e2195212ddb1e
+          # Prefer switch branch tip with sysmodule shrink (post-664bfa9)
+          git -C libzt fetch --no-tags --depth=1 origin "$LIBZT_SHA" || \
+            git -C libzt fetch --no-tags origin switch
+          git -C libzt checkout --detach "$LIBZT_SHA"
 
       - name: Verify pinned sources
         run: |
           set -eu
           test "$(git -C ldn_mitm rev-parse HEAD)" = "2fe07817eeea06b712009395f8bbcb2a02d30979"
-          test "$(git -C libzt rev-parse HEAD)" = "76c138bb916bc3a20d356bd4ef8e2195212ddb1e"
+          test "$(git -C libzt rev-parse HEAD)" = "$LIBZT_SHA"
           ATMOSPHERE_SHA="$(sed -n 's/^[[:space:]]*commit = //p' ldn_mitm/Atmosphere-libs/.gitrepo)"
           test "$ATMOSPHERE_SHA" = "d3083af1827cd6ca2a96feb9316eb85cd01bae1f"
           test -f ldn_mitm/Atmosphere-libs/config/templates/stratosphere.mk
@@ -39,6 +45,7 @@ jobs:
           echo "ldn_mitm: $(git -C ldn_mitm rev-parse HEAD)"
           echo "libzt:     $(git -C libzt rev-parse HEAD)"
           echo "Atmosphere-libs .gitrepo: $ATMOSPHERE_SHA"
+          echo "NOTE: libzt must be >= 664bfa9 (sysmodule fit), not 76c138b"
 
       - name: Restore Atmosphere libstratosphere cache
         id: atmosphere-cache
@@ -66,7 +73,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: libzt/build-switch
-          key: libzt-switch-76c138bb916bc3a20d356bd4ef8e2195212ddb1e-devkita64
+          key: libzt-switch-${{ env.LIBZT_SHA }}-devkita64
 
       - name: Verify devkitA64
         run: |
@@ -86,6 +93,7 @@ jobs:
           export PATH="$DEVKITA64/bin:$DEVKITPRO/tools/bin:$PATH"
           cmake -S . -B build-switch \
             -DCMAKE_TOOLCHAIN_FILE=/__w/switch-ldn-zt/switch-ldn-zt/cmake/switch.toolchain.cmake \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_STATIC_LIB=ON \
             -DBUILD_SHARED_LIB=OFF \
@@ -107,13 +115,14 @@ jobs:
           test -n "$LIB"
           test -s "$LIB"
           echo "Built libzt archive: $LIB"
+          ls -la "$LIB"
 
       - name: Save libzt cache on miss
         if: steps.libzt-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: libzt/build-switch
-          key: libzt-switch-76c138bb916bc3a20d356bd4ef8e2195212ddb1e-devkita64
+          key: libzt-switch-${{ env.LIBZT_SHA }}-devkita64
 
       - name: Stage libzt archive for Sys B
         run: |
@@ -133,10 +142,11 @@ jobs:
           cp -f libzt/include/ZeroTierSockets.h third_party/libzt/include/ZeroTierSockets.h
           ls -la third_party/libzt/lib/libzt.a
 
-      - name: Build Sys B Phase 1 (no zts_*)
+      - name: Build Sys B Phase 2b (nx-mod sysmodule libzt + zts_init only)
         run: |
           set -eu
           test -s third_party/libzt/lib/libzt.a
+          test -f third_party/libzt/include/ZeroTierSockets.h
           make -C zt_sysmodule V=1 -j4
           test -s zt_sysmodule/zerotier_sys.elf
           test -s zt_sysmodule/zerotier_sys.nsp
@@ -147,21 +157,23 @@ jobs:
           cp zt_sysmodule/res/toolbox.json dist/atmosphere/contents/4200000000000011/toolbox.json
           : > dist/atmosphere/contents/4200000000000011/flags/boot2.flag
 
-      - name: Verify no zts_* in Sys B sources
+      - name: Verify Phase 2b isolation
         run: |
           set -eu
-          ! grep -R -n -E 'zts_' zt_sysmodule/source
+          grep -n 'zts_init_from_storage' zt_sysmodule/source/main.cpp
+          ! grep -R -n -E 'zts_node_start|zts_net_join|zts_node_join' zt_sysmodule/source
+          grep -n 'zt_genmem_acquire' zt_sysmodule/source/main.cpp
           grep -F -- 'LIBS += $(ZTA) -lnx' zt_sysmodule/Makefile
           test -s dist/atmosphere/contents/4200000000000011/exefs.nsp
 
-      - name: Package Sys B Phase 1
+      - name: Package Sys B Phase 2b
         run: |
           set -eu
-          tar -C dist -czf zerotier-sysmodule-phase1.tar.gz atmosphere
+          tar -C dist -czf zerotier-sysmodule-phase2b.tar.gz atmosphere
 
-      - name: Upload Sys B Phase 1 artifact
+      - name: Upload Sys B Phase 2b artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zerotier-sysmodule-phase1
-          path: zerotier-sysmodule-phase1.tar.gz
+          name: zerotier-sysmodule-phase2b
+          path: zerotier-sysmodule-phase2b.tar.gz
           retention-days: 14

@@ -2,15 +2,30 @@
 
 Title: `4200000000000011`
 
-| Phase | What | Result |
-|-------|------|--------|
-| Skeleton (no libzt) | AMS hooks only | Boot OK |
-| Phase 1 | libzt linked, **no** `zts_*` | Boot OK |
-| Phase 2 | `zts_init_from_storage` | **Logo 0xffe** |
+| Phase | libzt | What | Result |
+|-------|-------|------|--------|
+| Skeleton | none | AMS hooks only | Boot OK |
+| Phase 1 | `76c138b` (pre-shrink) | link only, no `zts_*` | Boot OK |
+| Phase 2 | `76c138b` | `zts_init_from_storage` | **Logo 0xffe** |
+| **Phase 2b** | **`1aa9ada` / `>=664bfa9`** | sysmodule-fit lib + init only | **test this** |
 
-Conclusion: linking `libzt.a` is fine; **any real `zts_*` reference** pulls objects that abort at sysmodule load (same class of failure as full ZT inside ldn_mitm).
+## Phase 2b install
 
-NRO ZeroTier still works but does not stay up in-game.
+Artifact: `zerotier-sysmodule-phase2b`
 
-## Recover from bad build
-Delete or rename `atmosphere/contents/4200000000000011/` (or only `flags/boot2.flag`).
+```
+atmosphere/contents/4200000000000011/exefs.nsp
+atmosphere/contents/4200000000000011/flags/boot2.flag
+atmosphere/contents/4200000000000011/toolbox.json
+```
+
+Optional: `sdmc:/config/switch-ldn-zt/`
+
+## Recover
+
+Delete or rename `atmosphere/contents/4200000000000011/`.
+
+## Notes
+
+- nx-mod credits switch-ldn-zt for the original Switch port; sysmodule shrink is theirs.
+- Still no `node_start` / join until init boots clean.

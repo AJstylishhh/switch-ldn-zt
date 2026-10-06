@@ -1,31 +1,47 @@
 /*
- * ZeroTier sysmodule (Sys B).
+ * ZeroTier sysmodule (Sys B) — Phase 2b
  *
- * Phase 1 (hardware-proven): link libzt.a, NO zts_* calls.
- * Phase 2 (failed on device): zts_init_from_storage caused logo 0xffe.
- * Do not reintroduce zts_* until a safe load path exists for sysmodules.
+ * Uses nx-mod/libzt-nx sysmodule profile (switch branch >= 664bfa9):
+ * smaller tables, bounded multicast queue, optional 2 MiB genmem borrow.
+ *
+ * Phase 1 (76c138b-era lib, no zts_*): boot OK on device.
+ * Phase 2 (76c138b + zts_init): logo 0xffe.
+ * Phase 2b: same call with post-shrink lib + embedding hooks.
+ *
+ * Still NO zts_node_start / zts_net_join until init survives boot.
  */
 
 #include <stratosphere.hpp>
 
 #include <cstdlib>
 #include <cstdint>
+#include <cstring>
 #include <malloc.h>
 
 #include <switch.h>
+#include <ZeroTierSockets.h>
 
 namespace ams {
 
     namespace {
 
+        /* AMS malloc arena */
         constexpr size_t MallocBufferSize = 1_MB;
         alignas(os::MemoryPageSize) constinit u8 g_malloc_buffer[MallocBufferSize];
+
+        /* nx-mod libzt may borrow up to 2 MiB for identity hash */
+        constexpr size_t ZtGenmemSize = 2_MB;
+        alignas(os::MemoryPageSize) constinit u8 g_zt_genmem[ZtGenmemSize];
+        constinit bool g_zt_genmem_in_use = false;
+
+        constexpr const char *ZtStorageDir = "sdmc:/config/switch-ldn-zt";
 
     }
 
     namespace sysb {
 
-        alignas(0x40) constinit u8 g_heap_memory[128_KB];
+        /* General AMS/fs heap — larger than Phase 1 for ZT side allocations */
+        alignas(0x40) constinit u8 g_heap_memory[512_KB];
         constinit lmem::HeapHandle g_heap_handle;
         constinit bool g_heap_initialized;
         constinit os::SdkMutex g_heap_init_mutex;
@@ -89,13 +105,46 @@ namespace ams {
 
     void Main()
     {
-        /* Phase 1: no zts_* — referencing them pulls libzt objects that 0xffe at logo. */
+        /*
+         * Phase 2b: only zts_init_from_storage.
+         * Never abort the sysmodule on ZT failure.
+         * Main thread stack is 0x20000 (128 KiB) per app.json — matches nx-mod guidance.
+         */
+        const int zt_rc = zts_init_from_storage(ZtStorageDir);
+        AMS_UNUSED(zt_rc);
+
         while (true)
         {
             os::SleepThread(TimeSpan::FromSeconds(1));
         }
     }
 
+}
+
+/* ---- nx-mod/libzt-nx embedding hooks (weak symbols in the library) ---- */
+
+extern "C" void zt_stub_hit(const char *what)
+{
+    /* First use of a stubbed metrics/feature — keep quiet for boot isolation. */
+    AMS_UNUSED(what);
+}
+
+extern "C" void *zt_genmem_acquire(unsigned long size)
+{
+    if (size > ams::ZtGenmemSize || ams::g_zt_genmem_in_use)
+    {
+        return nullptr;
+    }
+    ams::g_zt_genmem_in_use = true;
+    return ams::g_zt_genmem;
+}
+
+extern "C" void zt_genmem_release(void *p)
+{
+    if (p == ams::g_zt_genmem)
+    {
+        ams::g_zt_genmem_in_use = false;
+    }
 }
 
 void *operator new(size_t size)
