@@ -1,18 +1,12 @@
 /*
  * ZeroTier sysmodule (Sys B) — Phase 2c
  *
- * Goal: process stays alive through logo/home (like Phase 1).
- * Do NOT call zts_* at boot. Enable later (nobody's "ovl enable" idea):
- *   create empty file: sdmc:/config/switch-ldn-zt/enable
- * then this module notices within a few seconds and runs zts_init_from_storage
- * on a dedicated libnx thread (128 KiB stack).
+ * Stay alive through logo/home. No zts_* at boot.
+ * After home menu, create empty file:
+ *   sdmc:/config/switch-ldn-zt/enable
+ * Module polls every 2s, then runs zts_init_from_storage on a 128 KiB libnx thread.
  *
- * Still no zts_node_start / join / games.
- *
- * History:
- *   Phase 1: link libzt, no zts_* refs → boot OK
- *   Phase 2/2b: zts_init in Main at boot → logo 0xffe
- *   Phase 2c: deferred enable after boot
+ * No node_start / join / games yet.
  */
 
 #include <stratosphere.hpp>
@@ -43,27 +37,18 @@ namespace ams {
         constinit bool g_zt_init_done = false;
         constinit int g_zt_init_rc = -999;
 
-        /* Dedicated stack for ZT init (nx-mod: 128 KiB, libnx thread) */
         constexpr size_t ZtThreadStackSize = 0x20000;
         alignas(0x1000) constinit u8 g_zt_thread_stack[ZtThreadStackSize];
         constinit Thread g_zt_thread;
 
         bool EnableFlagExists()
         {
-            FsFile f;
-            const Result rc = fsFsOpenFile(fsdevGetDeviceFileSystem("sdmc"), ZtEnablePath + 5 /* skip sdmc: */,
-                                          FsOpenMode_Read, &f);
-            /* Prefer fs:: via Atmosphere for path "sdmc:/..." */
-            AMS_UNUSED(rc);
-            AMS_UNUSED(f);
-
-            /* Simple portable check: try open via stdio after fsdev */
-            FILE *fp = fopen(ZtEnablePath, "rb");
-            if (fp == nullptr) {
-                return false;
+            fs::FileHandle file;
+            if (R_SUCCEEDED(fs::OpenFile(std::addressof(file), ZtEnablePath, fs::OpenMode_Read))) {
+                fs::CloseFile(file);
+                return true;
             }
-            fclose(fp);
-            return true;
+            return false;
         }
 
         void ZtInitThreadFunc(void *)
@@ -83,7 +68,6 @@ namespace ams {
 
             g_zt_init_started = true;
 
-            /* libnx thread so newlib TLS is valid for libzt worker threads */
             const Result trc = threadCreate(
                 &g_zt_thread,
                 ZtInitThreadFunc,
@@ -96,7 +80,6 @@ namespace ams {
             if (R_SUCCEEDED(trc)) {
                 threadStart(&g_zt_thread);
             } else {
-                /* Fallback: same thread (still only after enable, not at logo) */
                 ZtInitThreadFunc(nullptr);
             }
         }
@@ -169,10 +152,6 @@ namespace ams {
 
     void Main()
     {
-        /*
-         * Phase 2c: stay alive. No zts_* until enable file exists.
-         * Boot path must match Phase 1 behavior for logo survival.
-         */
         while (true)
         {
             TryStartZtInit();
