@@ -1,5 +1,5 @@
 # ZeroTier sysmodule (Sys B), title 4200000000000011.
-# Phase 2b: nx-mod/libzt-nx sysmodule profile (>= 664bfa9) + zts_init_from_storage only.
+# Phase 2c: alive at boot; zts_init only after sdmc:/config/switch-ldn-zt/enable
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 ATMOSPHERE_LIBRARIES_DIR := $(abspath $(MAKEFILE_DIR)/../ldn_mitm/Atmosphere-libs)
@@ -15,9 +15,9 @@ DATA :=
 LIBDIRS += $(PORTLIBS) $(LIBNX) $(ZTLIBDIR)
 INCLUDES += $(DEVKITPRO)/libnx/include
 
-TARGET_VERSION := 0.2.1-b2b
-CFLAGS += -DZT_SYS_B2B
-CXXFLAGS += -DZT_SYS_B2B
+TARGET_VERSION := 0.2.2-b2c
+CFLAGS += -DZT_SYS_B2C
+CXXFLAGS += -DZT_SYS_B2C
 LIBS += $(ZTA) -lnx
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))

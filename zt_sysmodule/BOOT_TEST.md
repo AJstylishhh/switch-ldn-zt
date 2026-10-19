@@ -1,17 +1,10 @@
-# Sys B hardware results
+# Sys B Phase 2c — deferred enable
 
 Title: `4200000000000011`
 
-| Phase | libzt | What | Result |
-|-------|-------|------|--------|
-| Skeleton | none | AMS hooks only | Boot OK |
-| Phase 1 | `76c138b` (pre-shrink) | link only, no `zts_*` | Boot OK |
-| Phase 2 | `76c138b` | `zts_init_from_storage` | **Logo 0xffe** |
-| **Phase 2b** | **`1aa9ada` / `>=664bfa9`** | sysmodule-fit lib + init only | **test this** |
+## Install
 
-## Phase 2b install
-
-Artifact: `zerotier-sysmodule-phase2b`
+Artifact: `zerotier-sysmodule-phase2c`
 
 ```
 atmosphere/contents/4200000000000011/exefs.nsp
@@ -19,13 +12,33 @@ atmosphere/contents/4200000000000011/flags/boot2.flag
 atmosphere/contents/4200000000000011/toolbox.json
 ```
 
-Optional: `sdmc:/config/switch-ldn-zt/`
+**Do not** create the enable file before first boot test.
+
+## Test 1 — stay alive (required)
+
+1. Install as above.
+2. Ensure **no** file: `sdmc:/config/switch-ldn-zt/enable`
+3. Boot CFW.
+
+| Result | Meaning |
+|--------|--------|
+| Home menu OK, Ultrahand shows module on | Phase 2c boot path OK |
+| Logo 0xffe | Linking `zts_*` still pulls fatal static init — stop |
+
+## Test 2 — enable ZT after boot (only if Test 1 passed)
+
+1. On SD (FTP/USB): create empty file
+   `sdmc:/config/switch-ldn-zt/enable`
+2. Wait a few seconds (module polls every 2s). No reboot required.
+3. If console fatals after enable → init still unsafe even deferred.
+4. If stays up → init survived; next is node_start (later).
 
 ## Recover
 
-Delete or rename `atmosphere/contents/4200000000000011/`.
+Delete `atmosphere/contents/4200000000000011/` or remove `enable` + reboot.
 
-## Notes
+## Not in this build
 
-- nx-mod credits switch-ldn-zt for the original Switch port; sysmodule shrink is theirs.
-- Still no `node_start` / join until init boots clean.
+- Network join / Central online
+- Games / LDN
+- `zts_node_start`
